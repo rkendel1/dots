@@ -5,20 +5,22 @@ import { PageError, pageInput, pagePatch } from './pages.js';
 import type { Platform } from './platform.js';
 export function pageRoutes(platform: Platform) {
   const app = new Hono();
-  app.get('/conversations/:id/reviewed-page/:toolCallId', (c) => {
-    const thread = platform.workspace.requireThread(c.req.param('id'));
-    const receipt = platform.workspace.pages.reviewReceipt(
+  app.get('/conversations/:id/reviewed-page/:toolCallId', async (c) => {
+    const thread = await platform.workspace.requireThread(c.req.param('id'));
+    const receipt = await platform.workspace.pages.reviewReceipt(
       thread.id,
       c.req.param('toolCallId'),
     );
     if (!receipt) return c.json(null);
-    if (!platform.workspace.canAccessSpace(thread.dotId, receipt.spaceId))
+    if (
+      !(await platform.workspace.canAccessSpace(thread.dotId, receipt.spaceId))
+    )
       return c.json(
         { error: 'This Dot no longer has access to the selected Space.' },
         403,
       );
     return c.json(
-      platform.workspace.pages.get(receipt.spaceId, receipt.pageId),
+      await platform.workspace.pages.get(receipt.spaceId, receipt.pageId),
     );
   });
   app.post('/conversations/:id/reviewed-page', async (c) => {
@@ -27,15 +29,20 @@ export function pageRoutes(platform: Platform) {
       .safeParse(await c.req.json());
     if (!data.success)
       return c.json({ error: 'Enter a valid page draft.' }, 400);
-    const thread = platform.workspace.requireThread(c.req.param('id'));
-    if (!platform.workspace.canAccessSpace(thread.dotId, data.data.spaceId))
+    const thread = await platform.workspace.requireThread(c.req.param('id'));
+    if (
+      !(await platform.workspace.canAccessSpace(
+        thread.dotId,
+        data.data.spaceId,
+      ))
+    )
       return c.json(
         { error: 'This Dot no longer has access to the selected Space.' },
         403,
       );
     const { spaceId, toolCallId, ...draft } = data.data;
     return c.json(
-      platform.workspace.pages.createReviewed(
+      await platform.workspace.pages.createReviewed(
         spaceId,
         draft,
         thread.id,
@@ -44,22 +51,27 @@ export function pageRoutes(platform: Platform) {
       201,
     );
   });
-  app.get('/conversations/:id/page-context', (c) => {
-    const thread = platform.workspace.requireThread(c.req.param('id'));
-    const dot = platform.workspace.dot(thread.dotId)!;
-    const page = platform.workspace.pages.forThread(thread.id);
+  app.get('/conversations/:id/page-context', async (c) => {
+    const thread = await platform.workspace.requireThread(c.req.param('id'));
+    const dot = await platform.workspace.dot(thread.dotId);
+    const page = await platform.workspace.pages.forThread(thread.id);
     return c.json(
-      page && platform.workspace.canAccessSpace(dot.id, page.spaceId)
+      page &&
+        dot &&
+        (await platform.workspace.canAccessSpace(dot.id, page.spaceId))
         ? { id: page.id, spaceId: page.spaceId, title: page.title }
         : null,
     );
   });
-  app.get('/spaces/:spaceId/pages', (c) =>
-    c.json(platform.workspace.pages.list(c.req.param('spaceId'))),
+  app.get('/spaces/:spaceId/pages', async (c) =>
+    c.json(await platform.workspace.pages.list(c.req.param('spaceId'))),
   );
-  app.get('/spaces/:spaceId/pages/:id', (c) =>
+  app.get('/spaces/:spaceId/pages/:id', async (c) =>
     c.json(
-      platform.workspace.pages.get(c.req.param('spaceId'), c.req.param('id')),
+      await platform.workspace.pages.get(
+        c.req.param('spaceId'),
+        c.req.param('id'),
+      ),
     ),
   );
   app.post('/spaces/:spaceId/pages', async (c) => {
@@ -73,7 +85,7 @@ export function pageRoutes(platform: Platform) {
         400,
       );
     return c.json(
-      platform.workspace.pages.create(c.req.param('spaceId'), data.data),
+      await platform.workspace.pages.create(c.req.param('spaceId'), data.data),
       201,
     );
   });
@@ -85,7 +97,7 @@ export function pageRoutes(platform: Platform) {
         400,
       );
     return c.json(
-      platform.workspace.pages.update(
+      await platform.workspace.pages.update(
         c.req.param('spaceId'),
         c.req.param('id'),
         data.data,

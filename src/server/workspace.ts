@@ -1,120 +1,130 @@
 import { ComputerStore } from './computer-store.js';
+import { PageThreads } from './page-threads.js';
 import { Pages } from './pages.js';
-import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { computerCollections } from './computer-collections.js';
+import {
+  byStartedAtDescRowidDesc,
+  isLostRace,
+  transactionId,
+  withoutStorageFields,
+} from './felt/records.js';
+import {
+  grantKey,
+  toDot,
+  toSpace,
+  workspaceCollections,
+  type CallRecord,
+  type CaptureRecord,
+  type DotRecord,
+  type GrantRecord,
+  type SpaceRecord,
+  type ThreadBindingRecord,
+  type WorkspaceCollections,
+} from './workspace-collections.js';
 import { randomUUID } from 'node:crypto';
+import type { AtomicTransactionScope, StateFirstDB } from '@feltdb/core';
 import { validateLearningSettings } from '../shared/learning.js';
 import type { CallReceipt, Conversation, Dot, Space } from '../shared/types.js';
+
+/** Bounded retries for a lost conditional write. */
+const MAX_ATTEMPTS = 8;
+
 export class WorkspaceStore {
-  private db: DatabaseSync;
+  /** The process-owned durable state that backs every domain here. */
+  readonly state: StateFirstDB;
+  private readonly felt: WorkspaceCollections;
   readonly pages: Pages;
+  /**
+   * Page-to-thread reservations. Durable in FeltDB now, but they stay attached
+   * here because they join against page rows to resolve the Space a
+   * conversation is anchored in.
+   */
+  readonly pageThreads: PageThreads;
   readonly computers: ComputerStore;
   constructor(
-    path: string,
     readonly ownerId: string,
+    /** The process-owned durable state that backs every domain here. */
+    state: StateFirstDB,
   ) {
-    if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-    this.db = new DatabaseSync(path);
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
-      CREATE TABLE IF NOT EXISTS spaces(id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, createdAt INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS dots(id TEXT PRIMARY KEY, spaceId TEXT NOT NULL, name TEXT NOT NULL, instructions TEXT NOT NULL, researchAllowed INTEGER NOT NULL, memoryAllowed INTEGER NOT NULL, createdAt INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS thread_bindings(id TEXT PRIMARY KEY, dotId TEXT NOT NULL, ownerId TEXT NOT NULL, title TEXT NOT NULL, createdAt INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS task_threads(taskId TEXT PRIMARY KEY, threadId TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS calls(id TEXT PRIMARY KEY, threadId TEXT NOT NULL, startedAt INTEGER NOT NULL, endedAt INTEGER, status TEXT NOT NULL, transcript TEXT NOT NULL, error TEXT);
-      CREATE TABLE IF NOT EXISTS captures(threadId TEXT PRIMARY KEY, value TEXT NOT NULL);`);
-    for (const [table, column, definition] of [
-      ['dots', 'learningContainerId', 'TEXT'],
-      ['dots', 'skillDeliveryEnabled', 'INTEGER NOT NULL DEFAULT 0'],
-      ['thread_bindings', 'learningContainerId', 'TEXT'],
-    ]) {
-      if (
-        !this.db
-          .prepare(`PRAGMA table_info(${table})`)
-          .all()
-          .some((field) => field.name === column)
-      )
-        this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
-    }
-    // Migrate only once: restarting must never restore a revoked grant.
-    if (
-      !this.db
-        .prepare(
-          "SELECT name FROM sqlite_master WHERE type='table' AND name='dot_spaces'",
-        )
-        .get()
-    ) {
-      this.db.exec(`BEGIN;
-        CREATE TABLE dot_spaces(dotId TEXT NOT NULL, spaceId TEXT NOT NULL, PRIMARY KEY(dotId, spaceId));
-        INSERT INTO dot_spaces SELECT id, spaceId FROM dots;
-        COMMIT;`);
-    }
-    this.computers = new ComputerStore(this.db);
-    this.pages = new Pages(this.db, (id) =>
-      this.spaces().some((space) => space.id === id),
+    this.state = state;
+    this.felt = workspaceCollections(state);
+    this.computers = new ComputerStore(state, computerCollections(state));
+    this.pageThreads = new PageThreads(
+      state,
+      this.felt.pageThreads,
+      this.felt.pageThreadIds,
     );
-    if (
-      !this.db
-        .prepare('PRAGMA table_info(calls)')
-        .all()
-        .some((column) => column.name === 'anchorMessageId')
-    )
-      this.db.exec('ALTER TABLE calls ADD COLUMN anchorMessageId TEXT');
-    if (!this.spaces().length) {
-      const space = this.createSpace(
-        'Everyday',
-        'A little space for your day.',
-      );
-      this.createDot(
-        space.id,
-        'Dot',
-        'Be thoughtful, practical, and concise. Help the user think clearly and follow through.',
-        true,
-        true,
-      );
-    }
+    this.pages = new Pages(state, (id) =>
+      this.spaces().then((spaces) => spaces.some((space) => space.id === id)),
+    );
+    this.pages.attachPageThreads(this.pageThreads);
   }
-  close() {
-    this.db.close();
+
+  private commit(prefix: string, stage: (tx: AtomicTransactionScope) => void) {
+    return this.state.transaction(stage, {
+      transactionId: transactionId(prefix),
+    });
   }
-  spaces(): Space[] {
-    return this.db
-      .prepare('SELECT * FROM spaces ORDER BY createdAt')
-      .all() as unknown as Space[];
+  /**
+   * Create the first-run default Space and Dot.
+   *
+   * This is a separate awaitable step rather than constructor work because the
+   * durable state is promise-based. It keeps the previous semantics exactly: the
+   * defaults are created only when no Space exists at all, so restarting never
+   * duplicates them or resurrects a revoked grant.
+   */
+  async bootstrap() {
+    if ((await this.spaces()).length) return;
+    const space = await this.createSpace(
+      'Everyday',
+      'A little space for your day.',
+    );
+    await this.createDot(
+      space.id,
+      'Dot',
+      'Be thoughtful, practical, and concise. Help the user think clearly and follow through.',
+      true,
+      true,
+    );
   }
-  createSpace(name: string, description: string): Space {
-    const space = {
+  async spaces(): Promise<Space[]> {
+    // Sorted explicitly: `all()` returns insertion order, and the previous
+    // implementation guaranteed `ORDER BY createdAt`.
+    return (await this.felt.spaces.all())
+      .map(toSpace)
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }
+  async createSpace(name: string, description: string): Promise<Space> {
+    const space: SpaceRecord = {
       id: randomUUID(),
       name,
       description,
       createdAt: Date.now(),
     };
-    this.db
-      .prepare('INSERT INTO spaces VALUES (?, ?, ?, ?)')
-      .run(space.id, name, description, space.createdAt);
-    return space;
+    // SQLite's INSERT was create-only. FeltDB's insert() is an upsert (Phase 0,
+    // F3), so create-only is asserted rather than assumed.
+    const created = await this.felt.spaces.putIfAbsent(space.id, space);
+    if (!created.inserted) throw new Error('Space already exists.');
+    return toSpace(created.value);
   }
-  dots(): Dot[] {
-    return this.db
-      .prepare('SELECT * FROM dots ORDER BY createdAt')
-      .all()
-      .map((row) => ({
-        ...row,
-        spaceIds: this.db
-          .prepare(
-            'SELECT spaceId FROM dot_spaces WHERE dotId=? ORDER BY spaceId',
-          )
-          .all(String(row.id))
-          .map((grant) => String(grant.spaceId)),
-        researchAllowed: !!row.researchAllowed,
-        memoryAllowed: !!row.memoryAllowed,
-        skillDeliveryEnabled: !!row.skillDeliveryEnabled,
-      })) as unknown as Dot[];
+  private async grants(): Promise<GrantRecord[]> {
+    return this.felt.dotSpaceGrants.all();
   }
-  dot(id: string) {
-    return this.dots().find((dot) => dot.id === id);
+  async dots(): Promise<Dot[]> {
+    const [records, grants] = await Promise.all([
+      this.felt.dots.all(),
+      this.grants(),
+    ]);
+    return records.map((record) => toDot(record, grants));
   }
-  createDot(
+  async dot(id: string): Promise<Dot | null> {
+    const [record, grants] = await Promise.all([
+      this.felt.dots.get(id),
+      this.grants(),
+    ]);
+    return record ? toDot(record, grants) : null;
+  }
+  async createDot(
     spaceId: string,
     name: string,
     instructions: string,
@@ -123,13 +133,12 @@ export class WorkspaceStore {
     spaceIds: string[] = [spaceId],
     learningContainerId: string | null = null,
     skillDeliveryEnabled = false,
-  ): Dot {
-    this.validateSpaceAccess(spaceId, spaceIds);
+  ): Promise<Dot> {
+    await this.validateSpaceAccess(spaceId, spaceIds);
     validateLearningSettings(learningContainerId, skillDeliveryEnabled);
-    const dot: Dot = {
+    const dot: DotRecord = {
       id: randomUUID(),
       spaceId,
-      spaceIds: [...new Set(spaceIds)].sort(),
       name,
       instructions,
       researchAllowed,
@@ -138,45 +147,40 @@ export class WorkspaceStore {
       skillDeliveryEnabled,
       createdAt: Date.now(),
     };
-    this.db.exec('BEGIN');
-    try {
-      this.db
-        .prepare(
-          'INSERT INTO dots (id, spaceId, name, instructions, researchAllowed, memoryAllowed, createdAt, learningContainerId, skillDeliveryEnabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        )
-        .run(
-          dot.id,
-          spaceId,
-          name,
-          instructions,
-          +researchAllowed,
-          +memoryAllowed,
-          dot.createdAt,
-          learningContainerId,
-          +skillDeliveryEnabled,
-        );
-      for (const id of dot.spaceIds)
-        this.db.prepare('INSERT INTO dot_spaces VALUES (?, ?)').run(dot.id, id);
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    return dot;
+    const grants = [...new Set(spaceIds)].sort();
+    // The Dot and every grant land together. SQLite wrapped the same two writes
+    // in a transaction, so a failure must not leave a Dot without its default
+    // Space. Each id is fresh per attempt: reusing one would make a concurrent
+    // call report `duplicate: true` and apply nothing.
+    await this.state.transaction({
+      transactionId: transactionId('create-dot'),
+      operations: [
+        { collection: 'dots', id: dot.id, value: { ...dot, __version: 1 } },
+        ...grants.map((space) => ({
+          collection: 'dot_space_grants',
+          id: grantKey(dot.id, space),
+          value: { dotId: dot.id, spaceId: space },
+        })),
+      ],
+    });
+    return { ...dot, spaceIds: grants };
   }
-  canAccessSpace(dotId: string, spaceId: string) {
-    return !!this.db
-      .prepare('SELECT 1 FROM dot_spaces WHERE dotId=? AND spaceId=?')
-      .get(dotId, spaceId);
+  async canAccessSpace(dotId: string, spaceId: string) {
+    // Membership is derived from the grants alone, so this is the single
+    // authoritative answer rather than a second copy of the relationship.
+    return (await this.grants()).some(
+      (grant) => grant.dotId === dotId && grant.spaceId === spaceId,
+    );
   }
-  private validateSpaceAccess(defaultSpace: string, spaceIds: string[]) {
+  private async validateSpaceAccess(defaultSpace: string, spaceIds: string[]) {
+    const spaces = await this.spaces();
     if (
       !spaceIds.includes(defaultSpace) ||
-      spaceIds.some((id) => !this.spaces().some((space) => space.id === id))
+      spaceIds.some((id) => !spaces.some((space) => space.id === id))
     )
       throw new Error('Space access must include a valid default destination.');
   }
-  updateDot(
+  async updateDot(
     id: string,
     patch: Pick<
       Dot,
@@ -187,12 +191,12 @@ export class WorkspaceStore {
       learningContainerId?: string | null;
       skillDeliveryEnabled?: boolean;
     },
-  ): Dot {
-    const current = this.dot(id);
+  ): Promise<Dot> {
+    const current = await this.dot(id);
     if (!current) throw new Error('Dot not found.');
     const defaultSpace = patch.spaceId ?? current.spaceId;
     const spaceIds = patch.spaceIds ?? current.spaceIds;
-    this.validateSpaceAccess(defaultSpace, spaceIds);
+    await this.validateSpaceAccess(defaultSpace, spaceIds);
     const learningContainerId =
       patch.learningContainerId === undefined
         ? (current.learningContainerId ?? null)
@@ -200,45 +204,79 @@ export class WorkspaceStore {
     const skillDeliveryEnabled =
       patch.skillDeliveryEnabled ?? current.skillDeliveryEnabled ?? false;
     validateLearningSettings(learningContainerId, skillDeliveryEnabled);
-    this.db.exec('BEGIN');
-    try {
-      this.db
-        .prepare(
-          'UPDATE dots SET name=?, instructions=?, researchAllowed=?, memoryAllowed=?, learningContainerId=?, skillDeliveryEnabled=? WHERE id=?',
-        )
-        .run(
-          patch.name,
-          patch.instructions,
-          +patch.researchAllowed,
-          +patch.memoryAllowed,
-          learningContainerId,
-          +skillDeliveryEnabled,
+    const wanted = [...new Set(spaceIds)];
+    const [record, allGrants] = await Promise.all([
+      this.felt.dots.get(id),
+      this.grants(),
+    ]);
+    if (!record) throw new Error('Dot not found.');
+    const existing = allGrants.filter((grant) => grant.dotId === id);
+    const kept = new Set(
+      existing
+        .filter((grant) => wanted.includes(grant.spaceId))
+        .map((grant) => grant.spaceId),
+    );
+    // A staged write carries no fence of its own (Phase 0, F2), so the Dot's
+    // fence is advanced explicitly here rather than silently reset. This is the
+    // same transaction the SQLite version used: field updates and a full grant
+    // replacement either both apply or neither does.
+    await this.state.transaction({
+      transactionId: transactionId('update-dot'),
+      operations: [
+        {
+          collection: 'dots',
           id,
-        );
-      this.db
-        .prepare('UPDATE dots SET spaceId=? WHERE id=?')
-        .run(defaultSpace, id);
-      this.db.prepare('DELETE FROM dot_spaces WHERE dotId=?').run(id);
-      for (const space of new Set(spaceIds))
-        this.db.prepare('INSERT INTO dot_spaces VALUES (?, ?)').run(id, space);
-      this.db.exec('COMMIT');
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      throw error;
-    }
-    return this.dot(id)!;
+          value: {
+            id,
+            spaceId: defaultSpace,
+            name: patch.name,
+            instructions: patch.instructions,
+            researchAllowed: patch.researchAllowed,
+            memoryAllowed: patch.memoryAllowed,
+            learningContainerId,
+            skillDeliveryEnabled,
+            createdAt: current.createdAt,
+            __version: (record.__version ?? 1) + 1,
+          },
+        },
+        // An operation with no `value` is a delete, which is how a revoked grant
+        // is actually removed from the authoritative relationship.
+        ...existing
+          .filter((grant) => !wanted.includes(grant.spaceId))
+          .map((grant) => ({
+            collection: 'dot_space_grants',
+            id: grantKey(id, grant.spaceId),
+          })),
+        ...wanted
+          .filter((spaceId) => !kept.has(spaceId))
+          .map((spaceId) => ({
+            collection: 'dot_space_grants',
+            id: grantKey(id, spaceId),
+            value: { dotId: id, spaceId },
+          })),
+      ],
+    });
+    const updated = await this.dot(id);
+    if (!updated) throw new Error('Dot not found.');
+    return updated;
   }
-  conversations(): Conversation[] {
-    return this.db
-      .prepare(
-        'SELECT * FROM thread_bindings WHERE ownerId=? ORDER BY createdAt DESC',
-      )
-      .all(this.ownerId) as unknown as Conversation[];
+  async conversations(): Promise<Conversation[]> {
+    const bindings = await this.felt.threadBindings.all();
+    return (
+      bindings
+        .filter((binding) => binding.ownerId === this.ownerId)
+        // Matches the previous `ORDER BY createdAt DESC`.
+        .sort((a, b) => b.createdAt - a.createdAt)
+    );
   }
-  bindThread(id: string, dotId: string, title: string): Conversation {
-    const dot = this.dot(dotId);
+  async bindThread(
+    id: string,
+    dotId: string,
+    title: string,
+  ): Promise<Conversation> {
+    const dot = await this.dot(dotId);
     if (!dot) throw new Error('Dot not found.');
-    const value: Conversation = {
+    const value: ThreadBindingRecord = {
       id,
       dotId,
       ownerId: this.ownerId,
@@ -246,48 +284,57 @@ export class WorkspaceStore {
       createdAt: Date.now(),
       learningContainerId: dot.learningContainerId ?? null,
     };
-    this.db
-      .prepare(
-        'INSERT INTO thread_bindings (id, dotId, ownerId, title, createdAt, learningContainerId) VALUES (?, ?, ?, ?, ?, ?)',
-      )
-      .run(
-        id,
-        dotId,
-        this.ownerId,
-        title,
-        value.createdAt,
-        value.learningContainerId ?? null,
-      );
-    return value;
+    // SQLite's primary key rejected a duplicate id, so create-only is asserted
+    // explicitly: an upsert would silently rebind a thread to another Dot.
+    const created = await this.felt.threadBindings.putIfAbsent(id, value);
+    if (!created.inserted) throw new Error('Conversation already exists.');
+    return created.value;
   }
-  requireThread(id: string, dotId?: string): Conversation {
-    const thread = this.conversations().find((thread) => thread.id === id);
+  async requireThread(id: string, dotId?: string): Promise<Conversation> {
+    // Scoped to this owner exactly as the previous owner-filtered read was, so a
+    // binding belonging to someone else stays invisible rather than becoming a
+    // cross-owner lookup.
+    const thread = (await this.conversations()).find(
+      (candidate) => candidate.id === id,
+    );
     if (!thread || (dotId && thread.dotId !== dotId))
       throw new Error('Conversation does not belong to this Dot and owner.');
     return thread;
   }
-  bindTask(taskId: string, threadId: string) {
-    this.requireThread(threadId);
-    this.db
-      .prepare('INSERT INTO task_threads VALUES (?, ?)')
-      .run(taskId, threadId);
+  /**
+   * Bind a scheduled task to the conversation it runs in.
+   *
+   * Create-only, as the bare SQLite `INSERT` was: a task may hold only one
+   * conversation, and a second bind is refused. SQLite surfaced that as a raw
+   * UNIQUE-constraint error; FeltDB has no equivalent error type, so the refusal
+   * is now a domain error with the same observable effect.
+   */
+  async bindTask(taskId: string, threadId: string) {
+    await this.requireThread(threadId);
+    const created = await this.felt.taskThreads.putIfAbsent(taskId, {
+      taskId,
+      threadId,
+    });
+    if (!created.inserted)
+      throw new Error('That task is already bound to a conversation.');
   }
-  taskThread(taskId: string): string | undefined {
-    const row = this.db
-      .prepare('SELECT threadId FROM task_threads WHERE taskId=?')
-      .get(taskId);
-    return typeof row?.threadId === 'string' ? row.threadId : undefined;
+
+  async taskThread(taskId: string): Promise<string | undefined> {
+    return (await this.felt.taskThreads.get(taskId))?.threadId;
   }
-  calls(threadId?: string): CallReceipt[] {
-    if (threadId) this.requireThread(threadId);
-    return this.db
-      .prepare(
-        `SELECT * FROM calls ${threadId ? 'WHERE threadId=?' : ''} ORDER BY startedAt DESC`,
-      )
-      .all(...(threadId ? [threadId] : [])) as unknown as CallReceipt[];
+
+  async calls(threadId?: string): Promise<CallReceipt[]> {
+    if (threadId) await this.requireThread(threadId);
+    // `ORDER BY startedAt DESC`, ties in insertion order.
+    return byStartedAtDescRowidDesc(
+      (await this.felt.calls.all()).filter(
+        (call) => !threadId || call.threadId === threadId,
+      ),
+    ).map(toCall);
   }
-  createCall(threadId: string): CallReceipt {
-    this.requireThread(threadId);
+
+  async createCall(threadId: string): Promise<CallReceipt> {
+    await this.requireThread(threadId);
     const call: CallReceipt = {
       id: randomUUID(),
       threadId,
@@ -297,73 +344,165 @@ export class WorkspaceStore {
       transcript: '',
       error: null,
     };
-    this.db
-      .prepare(
-        'INSERT INTO calls(id, threadId, startedAt, endedAt, status, transcript, error) VALUES (?, ?, ?, NULL, ?, ?, NULL)',
-      )
-      .run(call.id, threadId, call.startedAt, call.status, '');
+    await this.felt.calls.putIfAbsent(call.id, { ...call, __version: 1 });
     return call;
   }
-  call(id: string): CallReceipt {
-    const call = this.calls().find((call) => call.id === id);
-    if (!call) throw new Error('Call not found.');
-    this.requireThread(call.threadId);
+
+  async call(id: string): Promise<CallReceipt> {
+    const record = await this.felt.calls.get(id);
+    if (!record) throw new Error('Call not found.');
+    const call = toCall(record);
+    await this.requireThread(call.threadId);
     return call;
   }
-  setCall(
+
+  /**
+   * Advance a call's status and transcript.
+   *
+   * A call that already has `endedAt` is terminal and is returned untouched, so
+   * a late provider callback cannot reopen it.
+   */
+  async setCall(
     id: string,
     status: CallReceipt['status'],
     transcript: string,
     error: string | null = null,
   ) {
-    const call = this.call(id);
+    const call = await this.call(id);
     if (call.endedAt) return call;
-    this.db
-      .prepare(
-        'UPDATE calls SET status=?, transcript=?, error=?, endedAt=? WHERE id=?',
-      )
-      .run(
-        status,
-        transcript,
-        error,
-        status === 'ended' || status === 'failed' ? Date.now() : null,
-        id,
-      );
-    return this.call(id);
+    return this.writeCall(id, (record) => ({
+      ...withoutStorageFields(record),
+      status,
+      transcript,
+      error,
+      endedAt:
+        status === 'ended' || status === 'failed' ? Date.now() : record.endedAt,
+    }));
   }
-  saveLateTranscript(id: string, transcript: string) {
-    this.call(id);
-    return (
-      this.db
-        .prepare(
-          "UPDATE calls SET transcript=? WHERE id=? AND transcript='' AND endedAt IS NOT NULL",
-        )
-        .run(transcript, id).changes > 0
-    );
+
+  /**
+   * Record a transcript that arrived after the call ended.
+   *
+   * A compare-and-set: SQLite wrote only where `transcript='' AND endedAt IS NOT
+   * NULL` and reported whether it changed anything. The predicate is re-checked
+   * on every retry, so the boolean still means "this call wrote it".
+   */
+  async saveLateTranscript(id: string, transcript: string) {
+    await this.call(id);
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const record = await this.felt.calls.get(id);
+      if (!record) return false;
+      if (record.transcript !== '' || record.endedAt === null) return false;
+      try {
+        await this.commit('call-late-transcript', (tx) => {
+          tx.collection<CallRecord>('calls').set(
+            id,
+            {
+              ...withoutStorageFields(record),
+              transcript,
+              __version: (record.__version ?? 1) + 1,
+            },
+            { expectedVersion: record.__version ?? 1 },
+          );
+        });
+        return true;
+      } catch (error) {
+        if (isLostRace(error)) continue;
+        throw error;
+      }
+    }
+    return false;
   }
-  anchorCall(id: string, anchor: string | undefined) {
-    this.call(id);
-    this.db
-      .prepare('UPDATE calls SET anchorMessageId=? WHERE id=?')
-      .run(anchor ?? null, id);
+
+  async anchorCall(id: string, anchor: string | undefined) {
+    await this.call(id);
+    await this.writeCall(id, (record) => ({
+      ...withoutStorageFields(record),
+      anchorMessageId: anchor ?? null,
+    }));
   }
-  setCallError(id: string, error: string | null) {
-    this.call(id);
-    this.db.prepare('UPDATE calls SET error=? WHERE id=?').run(error, id);
+
+  async setCallError(id: string, error: string | null) {
+    await this.call(id);
+    await this.writeCall(id, (record) => ({
+      ...withoutStorageFields(record),
+      error,
+    }));
   }
-  saveCapture(threadId: string, value: unknown) {
-    this.requireThread(threadId);
-    this.db
-      .prepare(
-        'INSERT INTO captures VALUES (?, ?) ON CONFLICT(threadId) DO UPDATE SET value=excluded.value',
-      )
-      .run(threadId, JSON.stringify(value));
+  /** Read-evaluate-fenced-write, with the retry that makes the fence sound. */
+  private async writeCall(
+    id: string,
+    build: (record: CallRecord) => CallRecord,
+  ): Promise<CallReceipt> {
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const record = await this.felt.calls.get(id);
+      if (!record) throw new Error('Call not found.');
+      const next: CallRecord = {
+        ...build(record),
+        __version: (record.__version ?? 1) + 1,
+      };
+      try {
+        await this.commit('call-update', (tx) => {
+          tx.collection<CallRecord>('calls').set(id, next, {
+            expectedVersion: record.__version ?? 1,
+          });
+        });
+        return toCall(next);
+      } catch (error) {
+        if (isLostRace(error)) continue;
+        throw error;
+      }
+    }
+    throw new Error('That call changed too often to save.');
   }
-  capture(threadId: string): unknown {
-    this.requireThread(threadId);
-    const row = this.db
-      .prepare('SELECT value FROM captures WHERE threadId=?')
-      .get(threadId);
-    return typeof row?.value === 'string' ? JSON.parse(row.value) : null;
+
+  async saveCapture(threadId: string, value: unknown) {
+    await this.requireThread(threadId);
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const existing = await this.felt.captures.get(threadId);
+      const version = existing?.__version ?? 0;
+      try {
+        await this.commit('capture-save', (tx) => {
+          // Upsert, fenced on the version that was read: SQLite's
+          // `ON CONFLICT(threadId) DO UPDATE SET value` with no lost update.
+          tx.collection<CaptureRecord>('captures').set(
+            threadId,
+            { threadId, value, __version: version + 1 },
+            existing ? { expectedVersion: version } : { requireAbsent: true },
+          );
+        });
+        return;
+      } catch (error) {
+        if (isLostRace(error)) continue;
+        throw error;
+      }
+    }
+    throw new Error('That capture changed too often to save.');
   }
+
+  async capture(threadId: string): Promise<unknown> {
+    await this.requireThread(threadId);
+    // SQLite read an absent row as NULL; so does FeltDB here.
+    return (await this.felt.captures.get(threadId))?.value ?? null;
+  }
+}
+
+/** Strip storage metadata; `CallReceipt` already carries a domain `id`. */
+function toCall(record: CallRecord): CallReceipt {
+  const { __version: _fence, ...rest } = record;
+  void _fence;
+  const call: CallReceipt = {
+    id: record.id,
+    threadId: record.threadId,
+    startedAt: record.startedAt,
+    endedAt: record.endedAt,
+    status: record.status,
+    transcript: record.transcript,
+    error: record.error,
+  };
+  // `anchorMessageId` was added after the fact and stays absent until anchored.
+  if (record.anchorMessageId !== undefined)
+    call.anchorMessageId = record.anchorMessageId;
+  void rest;
+  return call;
 }

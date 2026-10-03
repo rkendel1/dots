@@ -2,8 +2,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { EventType, type BaseEvent, type RunAgentInput } from '@ag-ui/core';
 import { Observable, lastValueFrom, of, throwError, toArray } from 'rxjs';
 import { DotAgent } from '../src/server/dot-agent.js';
-import { Store } from '../src/server/store.js';
-import { WorkspaceStore } from '../src/server/workspace.js';
+import { memoryStore } from './helpers/store.js';
+import { memoryWorkspace } from './helpers/workspace.js';
 const inner = vi.hoisted(() => ({
   configure:
     vi.fn<
@@ -40,15 +40,15 @@ afterEach(() => {
 });
 
 it('uses the conversation container for delivery and preserves tools and override restrictions', async () => {
-  const f = fixture(false);
-  const dot = f.workspace.dots()[0];
-  f.workspace.updateDot(dot.id, {
+  const f = await fixture(false);
+  const dot = (await f.workspace.dots())[0]!;
+  await f.workspace.updateDot(dot.id, {
     ...dot,
     learningContainerId: 'research',
     skillDeliveryEnabled: true,
   });
-  f.workspace.bindThread('learning', dot.id, 'Learning');
-  f.workspace.updateDot(dot.id, {
+  await f.workspace.bindThread('learning', dot.id, 'Learning');
+  await f.workspace.updateDot(dot.id, {
     ...dot,
     learningContainerId: 'writing',
     skillDeliveryEnabled: true,
@@ -84,7 +84,7 @@ it('uses the conversation container for delivery and preserves tools and overrid
   expect(inner.configure).toHaveBeenLastCalledWith(
     expect.objectContaining({ learnedSkills: undefined, type: 'tanstack' }),
   );
-  f.workspace.updateDot(dot.id, {
+  await f.workspace.updateDot(dot.id, {
     ...dot,
     learningContainerId: 'writing',
     skillDeliveryEnabled: false,
@@ -96,12 +96,14 @@ it('uses the conversation container for delivery and preserves tools and overrid
     expect.objectContaining({ learnedSkills: undefined, type: 'tanstack' }),
   );
 });
-function fixture(channel = true) {
-  const store = new Store(':memory:');
-  const workspace = new WorkspaceStore(':memory:', 'owner');
-  databases.push(store, workspace);
-  const dot = workspace.dots()[0];
-  workspace.bindThread('thread', dot.id, 'Test');
+async function fixture(channel = true) {
+  const handle = memoryStore();
+  const store = handle.store;
+  const opened = await memoryWorkspace();
+  const workspace = opened.store;
+  databases.push(handle, opened.state);
+  const dot = (await workspace.dots())[0]!;
+  await workspace.bindThread('thread', dot.id, 'Test');
   const agent = new DotAgent(
     store,
     workspace,
@@ -129,7 +131,7 @@ function fixture(channel = true) {
   return { agent, input, workspace };
 }
 it('replaces channel RUN_ERROR payload entirely before the SDK renderer sees it', async () => {
-  const f = fixture();
+  const f = await fixture();
   inner.run.mockReturnValue(
     of({
       type: EventType.RUN_ERROR,
@@ -148,7 +150,7 @@ it('replaces channel RUN_ERROR payload entirely before the SDK renderer sees it'
   ]);
 });
 it('sanitizes observable errors and startup exceptions without retaining causes', async () => {
-  const f = fixture();
+  const f = await fixture();
   inner.run.mockReturnValue(throwError(() => new Error('SECRET transport')));
   const events = await lastValueFrom(f.agent.run(f.input).pipe(toArray()));
   expect(events[0].type).toBe(EventType.RUN_ERROR);
@@ -160,7 +162,7 @@ it('sanitizes observable errors and startup exceptions without retaining causes'
   expect(startup).toEqual(events);
 });
 it('preserves normal channel text and existing web error behavior', async () => {
-  const f = fixture();
+  const f = await fixture();
   const text = {
     type: EventType.TEXT_MESSAGE_CONTENT,
     messageId: 'msg',
@@ -170,7 +172,7 @@ it('preserves normal channel text and existing web error behavior', async () => 
   expect(await lastValueFrom(f.agent.run(f.input).pipe(toArray()))).toEqual([
     text,
   ]);
-  const web = fixture(false);
+  const web = await fixture(false);
   const error = { type: EventType.RUN_ERROR, message: 'Provider details' };
   inner.run.mockReturnValue(of(error));
   expect(await lastValueFrom(web.agent.run(web.input).pipe(toArray()))).toEqual(
@@ -193,7 +195,7 @@ it('exposes only the canonical review tool to web chat and none to Slack', async
     },
     { name: 'untrusted_tool', description: 'unexpected', parameters: {} },
   ];
-  const web = fixture(false);
+  const web = await fixture(false);
   await lastValueFrom(
     web.agent.run({ ...web.input, tools: offered }).pipe(toArray()),
   );
@@ -208,7 +210,7 @@ it('exposes only the canonical review tool to web chat and none to Slack', async
       forwardedProps: {},
     }),
   );
-  const slack = fixture(true);
+  const slack = await fixture(true);
   await lastValueFrom(
     slack.agent.run({ ...slack.input, tools: offered }).pipe(toArray()),
   );

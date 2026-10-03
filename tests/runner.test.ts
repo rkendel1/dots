@@ -1,7 +1,13 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { Store } from '../src/server/store.js';
 import { Runner } from '../src/server/runner.js';
 import { research, type Config } from '../src/server/research.js';
+import { memoryStore, type OpenStore } from './helpers/store.js';
+const handles: OpenStore[] = [];
+function fixtureStore() {
+  const handle = memoryStore();
+  handles.push(handle);
+  return handle.store;
+}
 const config: Config = {
   mode: 'live',
   apiKey: 'test',
@@ -10,9 +16,12 @@ const config: Config = {
   browserSecret: 'test',
   baseUrl: 'https://model.example/v1',
 };
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  handles.splice(0).forEach((handle) => handle.close());
+  vi.unstubAllGlobals();
+});
 it('aborts research when permissions are revoked outside the runner instance', async () => {
-  const store = new Store(':memory:');
+  const store = fixtureStore();
   const runner = new Runner(store, config);
   let requestSignal: AbortSignal | undefined;
   const request = vi.fn(
@@ -27,16 +36,15 @@ it('aborts research when permissions are revoked outside the runner instance', a
       }),
   );
   vi.stubGlobal('fetch', request);
-  store.createTask('Read https://example.com');
+  await store.createTask('Read https://example.com');
   const tick = runner.tick();
   await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-  store.updateSettings({ memoryAllowed: false });
+  await store.updateSettings({ memoryAllowed: false });
   await tick;
   expect(requestSignal?.aborted).toBe(true);
   expect(request).toHaveBeenCalledOnce();
-  expect(store.tasks()[0].status).toBe('queued');
-  runner.stop();
-  store.close();
+  expect((await store.tasks())[0]!.status).toBe('queued');
+  await runner.stop();
 });
 it('checks abort again before sending source evidence or memories to the model', async () => {
   const fetch = vi.fn().mockResolvedValue(
@@ -62,19 +70,18 @@ it('checks abort again before sending source evidence or memories to the model',
   expect(fetch).toHaveBeenCalledOnce();
 });
 it('omits stored memories from research when memory permission is disabled', async () => {
-  const store = new Store(':memory:');
-  store.saveMemory('Sensitive preference');
-  store.updateSettings({ memoryAllowed: false });
-  const task = store.createTask('Read this sample');
+  const store = fixtureStore();
+  await store.saveMemory('Sensitive preference');
+  await store.updateSettings({ memoryAllowed: false });
+  const task = await store.createTask('Read this sample');
   const runner = new Runner(store, { mode: 'sample', baseUrl: '' });
   await runner.tick();
-  expect(store.detail(task.id)?.runs[0].result?.text).not.toContain(
+  expect((await store.detail(task.id))?.runs[0]?.result?.text).not.toContain(
     'Sensitive preference',
   );
-  store.close();
 });
 it('requeues active work on graceful shutdown instead of losing it', async () => {
-  const store = new Store(':memory:');
+  const store = fixtureStore();
   const runner = new Runner(store, config);
   const fetch = vi.fn(
     (_url: string, options: RequestInit) =>
@@ -87,12 +94,11 @@ it('requeues active work on graceful shutdown instead of losing it', async () =>
       ),
   );
   vi.stubGlobal('fetch', fetch);
-  store.createTask('Read https://example.com');
+  await store.createTask('Read https://example.com');
   const pending = runner.tick();
   await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
-  runner.stop();
+  await runner.stop();
   await pending;
-  expect(store.tasks()[0].status).toBe('queued');
-  expect(store.claim()).toBeTruthy();
-  store.close();
+  expect((await store.tasks())[0]!.status).toBe('queued');
+  expect(await store.claim()).toBeTruthy();
 });

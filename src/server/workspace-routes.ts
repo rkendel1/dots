@@ -22,13 +22,13 @@ const dotSchema = z
 export function workspaceRoutes(platform: Platform, voice: VoiceService) {
   const app = new Hono();
   app.route('/', pageRoutes(platform));
-  app.get('/workspace', (c) =>
+  app.get('/workspace', async (c) =>
     c.json({
-      spaces: platform.workspace.spaces(),
-      dots: platform.workspace.dots(),
-      conversations: platform.workspace.conversations(),
+      spaces: await platform.workspace.spaces(),
+      dots: await platform.workspace.dots(),
+      conversations: await platform.workspace.conversations(),
       setup: platform.setup(),
-      calls: platform.workspace.calls(),
+      calls: await platform.workspace.calls(),
     }),
   );
   app.post('/spaces', async (c) => {
@@ -45,7 +45,10 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         400,
       );
     return c.json(
-      platform.workspace.createSpace(data.data.name, data.data.description),
+      await platform.workspace.createSpace(
+        data.data.name,
+        data.data.description,
+      ),
       201,
     );
   });
@@ -78,7 +81,7 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       );
     }
     return c.json(
-      platform.workspace.createDot(
+      await platform.workspace.createDot(
         data.data.spaceId,
         data.data.name,
         data.data.instructions,
@@ -95,7 +98,7 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
     const data = dotSchema.safeParse(await c.req.json());
     if (!data.success)
       return c.json({ error: 'Invalid specialist settings.' }, 400);
-    const current = platform.workspace.dot(c.req.param('id'));
+    const current = await platform.workspace.dot(c.req.param('id'));
     if (!current) return c.json({ error: 'Dot not found.' }, 404);
     try {
       validateLearningSettings(
@@ -115,7 +118,9 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         400,
       );
     }
-    return c.json(platform.workspace.updateDot(c.req.param('id'), data.data));
+    return c.json(
+      await platform.workspace.updateDot(c.req.param('id'), data.data),
+    );
   });
   app.post('/conversations', async (c) => {
     const data = z
@@ -137,8 +142,8 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       201,
     );
   });
-  app.get('/conversations/:id/capture', (c) =>
-    c.json(platform.workspace.capture(c.req.param('id'))),
+  app.get('/conversations/:id/capture', async (c) =>
+    c.json(await platform.workspace.capture(c.req.param('id'))),
   );
   app.post('/voice/calls', async (c) => {
     const data = z
@@ -155,11 +160,11 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       201,
     );
   });
-  app.get('/voice/calls/:id', (c) =>
-    c.json(platform.workspace.call(c.req.param('id'))),
+  app.get('/voice/calls/:id', async (c) =>
+    c.json(await platform.workspace.call(c.req.param('id'))),
   );
-  app.post('/voice/calls/:id/active', (c) =>
-    c.json(voice.activate(c.req.param('id'))),
+  app.post('/voice/calls/:id/active', async (c) =>
+    c.json(await voice.activate(c.req.param('id'))),
   );
   app.post('/voice/calls/:id/compute', async (c) => {
     const data = z
@@ -196,7 +201,10 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         { error: 'Transcript exceeds the 20,000 character limit.' },
         400,
       );
-    platform.workspace.anchorCall(c.req.param('id'), data.data.anchorMessageId);
+    await platform.workspace.anchorCall(
+      c.req.param('id'),
+      data.data.anchorMessageId,
+    );
     return c.json(await voice.end(c.req.param('id'), data.data.transcript));
   });
   app.all('/copilotkit/*', (c) => platform.handle(c.req.raw));

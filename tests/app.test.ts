@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/server/app.js';
-import { Store } from '../src/server/store.js';
 import { Runner } from '../src/server/runner.js';
+import { memoryStore, type OpenStore } from './helpers/store.js';
 import type { Config } from '../src/server/research.js';
-const stores: Store[] = [];
+const handles: OpenStore[] = [];
 const config: Config = { mode: 'sample', baseUrl: 'https://api.openai.com/v1' };
 function fixture(token?: string) {
-  const store = new Store(':memory:');
-  stores.push(store);
+  const handle = memoryStore();
+  handles.push(handle);
+  const store = handle.store;
   const runner = new Runner(store, config);
   return {
     store,
@@ -20,7 +21,7 @@ const json = (body: unknown) => ({
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify(body),
 });
-afterEach(() => stores.splice(0).forEach((store) => store.close()));
+afterEach(() => handles.splice(0).forEach((handle) => handle.close()));
 describe('API boundaries', () => {
   it('requires owner token for state and mutations when configured', async () => {
     const { app } = fixture('private-token');
@@ -68,11 +69,11 @@ describe('API boundaries', () => {
         )
       ).status,
     ).toBe(400);
-    store.updateSettings({ researchAllowed: false });
+    await store.updateSettings({ researchAllowed: false });
     expect(
       (await app.request('/api/tasks', json({ prompt: 'Research' }))).status,
     ).toBe(403);
-    expect(store.claim()).toBeNull();
+    expect(await store.claim()).toBeNull();
   });
   it('runs a sample job from the durable queue and retains its result', async () => {
     const { app, store, runner } = fixture();
@@ -82,25 +83,25 @@ describe('API boundaries', () => {
     );
     expect(response.status).toBe(201);
     await runner.tick();
-    const task = store.tasks()[0];
+    const task = (await store.tasks())[0]!;
     expect(task.status).toBe('completed');
-    expect(store.detail(task.id)?.runs[0].result?.sample).toBe(true);
+    expect((await store.detail(task.id))?.runs[0]?.result?.sample).toBe(true);
   });
   it('persists memory edits and deletes', async () => {
     const { app, store } = fixture();
     await app.request('/api/memories', json({ text: 'Prefer short briefs' }));
-    const memory = store.memories()[0];
+    const memory = (await store.memories())[0]!;
     const updated = await app.request(`/api/memories/${memory.id}`, {
       ...json({ text: 'Prefer deep briefs' }),
       method: 'PUT',
     });
     expect(updated.status).toBe(200);
-    expect(store.memories()[0].text).toBe('Prefer deep briefs');
+    expect((await store.memories())[0]!.text).toBe('Prefer deep briefs');
     await app.request(`/api/memories/${memory.id}`, {
       ...json({}),
       method: 'DELETE',
     });
-    expect(store.memories()).toHaveLength(0);
+    expect(await store.memories()).toHaveLength(0);
   });
 });
 it('rejects DNS-rebinding Host even with a matching hostile Origin', async () => {

@@ -27,7 +27,7 @@ export class ComputerService {
   constructor(
     private workspace: WorkspaceStore,
     private config: PlatformConfig,
-    private paused: () => boolean,
+    private paused: () => boolean | Promise<boolean>,
     private transport: typeof fetch = fetch,
     private deadlineMs = 70000,
   ) {}
@@ -43,22 +43,25 @@ export class ComputerService {
       .update(`opendots-computer:${id}`)
       .digest('hex');
   }
-  private requireDot(id: string) {
-    if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id) || !this.workspace.dot(id))
+  private async requireDot(id: string) {
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(id) ||
+      !(await this.workspace.dot(id))
+    )
       throw new Error('Dot not found.');
   }
-  private allowed(
+  private async allowed(
     id: string,
     kind: 'browser' | 'files' | 'shell' | undefined,
     actor: 'agent' | 'owner',
   ) {
-    this.requireDot(id);
+    await this.requireDot(id);
     if (!this.configured)
       throw new Error('Computer service is not configured.');
-    const policy = this.workspace.computers.permissions(id);
+    const policy = await this.workspace.computers.permissions(id);
     if (!policy.enabled || (kind && !policy[kind]))
       throw new Error('Computer permission is disabled.');
-    if (actor === 'agent' && this.paused())
+    if (actor === 'agent' && (await this.paused()))
       throw new Error('Agents are paused.');
   }
   private async json(
@@ -187,11 +190,11 @@ export class ComputerService {
     return this.endpoint(id, state);
   }
   async status(id: string): Promise<ComputerStatus> {
-    this.requireDot(id);
+    await this.requireDot(id);
     const base = {
       configured: this.configured,
-      permissions: this.workspace.computers.permissions(id),
-      audit: this.workspace.computers.audit(id),
+      permissions: await this.workspace.computers.permissions(id),
+      audit: await this.workspace.computers.audit(id),
     };
     if (!this.configured) return { ...base, state: 'not_configured' };
     try {
@@ -224,14 +227,14 @@ export class ComputerService {
     actor: 'owner' | 'agent',
     fn: () => Promise<T>,
   ): Promise<T> {
-    this.requireDot(id);
-    const receipt = this.workspace.computers.begin(id, action, actor);
+    await this.requireDot(id);
+    const receipt = await this.workspace.computers.begin(id, action, actor);
     try {
       const result = await fn();
-      this.workspace.computers.finish(receipt, 'succeeded');
+      await this.workspace.computers.finish(receipt, 'succeeded');
       return result;
     } catch (error) {
-      this.workspace.computers.finish(receipt, 'failed');
+      await this.workspace.computers.finish(receipt, 'failed');
       throw error;
     }
   }
@@ -244,7 +247,7 @@ export class ComputerService {
   }
   async start(id: string) {
     await this.audited(id, 'start', 'owner', async () => {
-      this.allowed(id, undefined, 'owner');
+      await this.allowed(id, undefined, 'owner');
       this.endpoint(id, await this.supervisor(`/computers/${id}/ensure`, {}));
     });
     return this.status(id);
@@ -261,9 +264,9 @@ export class ComputerService {
     await this.audited(id, verb, 'owner', async () => {
       if (!this.configured)
         throw new Error('Computer service is not configured.');
-      if (verb === 'take') this.allowed(id, 'browser', 'owner');
+      if (verb === 'take') await this.allowed(id, 'browser', 'owner');
       const url = await this.running(id);
-      if (verb === 'take') this.allowed(id, 'browser', 'owner');
+      if (verb === 'take') await this.allowed(id, 'browser', 'owner');
       let control: ComputerControl = controlSchema.parse(
         await this.json(
           `${url}/control`,
@@ -328,21 +331,20 @@ export class ComputerService {
           : action.startsWith('files_')
             ? 'files'
             : 'browser';
-      this.allowed(id, kind, actor);
+      await this.allowed(id, kind, actor);
       const cancellation = new AbortController();
       const activeSignal = signal
         ? AbortSignal.any([signal, cancellation.signal])
         : cancellation.signal;
       const watcher = setInterval(() => {
-        try {
-          this.allowed(id, kind, actor);
-        } catch {
-          cancellation.abort();
-        }
+        // Re-checked off the interval tick: a policy change aborts the action.
+        // `allowed` is async now, so the check is fired and its rejection is
+        // what aborts, exactly as the previous synchronous throw did.
+        void this.allowed(id, kind, actor).catch(() => cancellation.abort());
       }, 50);
       try {
         const url = await this.running(id, activeSignal);
-        this.allowed(id, kind, actor);
+        await this.allowed(id, kind, actor);
         activeSignal.throwIfAborted();
         const path = action
           .replace(/^files_/, 'files/')
@@ -354,7 +356,7 @@ export class ComputerService {
           activeSignal,
           id,
         );
-        this.allowed(id, kind, actor);
+        await this.allowed(id, kind, actor);
         if (action === 'exec' && result && typeof result === 'object') {
           const copy = { ...result } as Record<string, unknown>;
           delete copy.command;

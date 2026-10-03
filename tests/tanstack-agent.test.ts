@@ -3,8 +3,8 @@ import { EventType, type RunAgentInput } from '@ag-ui/core';
 import { lastValueFrom, toArray } from 'rxjs';
 import { DotAgent } from '../src/server/dot-agent.js';
 import { completion } from './fixtures/model-stream.js';
-import { Store } from '../src/server/store.js';
-import { WorkspaceStore } from '../src/server/workspace.js';
+import { memoryStore } from './helpers/store.js';
+import { memoryWorkspace } from './helpers/workspace.js';
 import { pageReviewTool } from '../src/shared/page-review.js';
 
 const databases: Array<{ close(): void }> = [];
@@ -13,12 +13,14 @@ afterEach(() => {
   databases.splice(0).forEach((db) => db.close());
 });
 
-function fixture() {
-  const store = new Store(':memory:');
-  const workspace = new WorkspaceStore(':memory:', 'owner');
-  databases.push(store, workspace);
-  const dot = workspace.dots()[0];
-  workspace.bindThread('thread', dot.id, 'TanStack');
+async function fixture() {
+  const handle = memoryStore();
+  const store = handle.store;
+  const opened = await memoryWorkspace();
+  const workspace = opened.store;
+  const dot = (await workspace.dots())[0]!;
+  databases.push(handle, opened.state);
+  await workspace.bindThread('thread', dot.id, 'TanStack');
   const agent = new DotAgent(
     store,
     workspace,
@@ -79,7 +81,7 @@ function createPageCall(args: Record<string, unknown>) {
 }
 
 it('executes a page tool, continues with its result, and emits AG-UI text and tool events', async () => {
-  const f = fixture();
+  const f = await fixture();
   const network = vi
     .spyOn(globalThis, 'fetch')
     .mockResolvedValueOnce(
@@ -89,7 +91,7 @@ it('executes a page tool, continues with its result, and emits AG-UI text and to
       completion({ role: 'assistant', content: 'Created Notes.' }),
     );
   const events = await lastValueFrom(f.agent.run(f.input).pipe(toArray()));
-  expect(f.workspace.pages.list(f.dot.spaceId)).toEqual(
+  expect(await f.workspace.pages.list(f.dot.spaceId)).toEqual(
     expect.arrayContaining([expect.objectContaining({ title: 'Notes' })]),
   );
   expect(
@@ -139,7 +141,7 @@ it('executes a page tool, continues with its result, and emits AG-UI text and to
 });
 
 it('offers the canonical review tool and waits for the client without saving a page', async () => {
-  const f = fixture();
+  const f = await fixture();
   const before = f.workspace.pages.list(f.dot.spaceId);
   const network = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
     completion(
@@ -209,7 +211,7 @@ it('offers the canonical review tool and waits for the client without saving a p
 });
 
 it('validates tool arguments before making a page change', async () => {
-  const f = fixture();
+  const f = await fixture();
   const before = f.workspace.pages.list(f.dot.spaceId);
   vi.spyOn(globalThis, 'fetch')
     .mockResolvedValueOnce(createPageCall({ title: 123, content: '# Invalid' }))
@@ -229,7 +231,7 @@ it('validates tool arguments before making a page change', async () => {
 });
 
 it('aborts the TanStack provider request when the owner pauses work', async () => {
-  const f = fixture();
+  const f = await fixture();
   const started = new Promise<AbortSignal>((ready) => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(
       (_url, init) =>

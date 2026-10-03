@@ -1,7 +1,13 @@
 export function createShutdown(options: {
-  stopRunner: () => void;
+  /** Awaitable because `Runner.stop()` requeues its claims in durable state. */
+  stopRunner: () => void | Promise<void>;
   stopPlatform: () => Promise<void>;
   closeServer: () => Promise<void>;
+  /**
+   * Release process-wide resources such as the durable state lock.
+   * Runs after the HTTP server stops accepting connections.
+   */
+  closeState?: () => void;
   exit: (code: number) => void;
   report: (operation: string, error: unknown) => void;
   timeoutMs?: number;
@@ -15,7 +21,7 @@ export function createShutdown(options: {
         options.report(operation, error);
       };
       try {
-        options.stopRunner();
+        await options.stopRunner();
       } catch (error) {
         report('Stopping scheduler failed', error);
       }
@@ -41,6 +47,13 @@ export function createShutdown(options: {
         deadline,
       ]);
       clearTimeout(timer);
+      // The state lock is released last, so no request can still be reading
+      // from the runtime while another process takes ownership.
+      try {
+        options.closeState?.();
+      } catch (error) {
+        report('Closing durable state failed', error);
+      }
       options.exit(failed ? 1 : 0);
     })());
 }

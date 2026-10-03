@@ -35,11 +35,11 @@ export async function research(
   memories: Memory[],
   config: Config,
   signal: AbortSignal,
-  progress: (text: string) => void,
+  progress: (text: string) => Promise<void> | void,
 ): Promise<Result> {
   signal.throwIfAborted();
   if (config.mode === 'sample') {
-    progress(
+    await progress(
       'Preparing a fictional sample brief. No websites or model providers are contacted.',
     );
     const topic = /trip|travel|weekend/i.test(prompt)
@@ -75,7 +75,7 @@ export async function research(
       'Please include a public https:// page URL. Open-ended web search is not configured; OpenDots will not invent sources.',
     );
   const url = match[0].replace(/[.,;!?]+$/, '');
-  progress('Reading the requested public page in the isolated browser.');
+  await progress('Reading the requested public page in the isolated browser.');
   const response = await fetch(
     `${config.browserUrl!.replace(/\/$/, '')}/browse`,
     {
@@ -99,7 +99,7 @@ export async function research(
   if (!parsed.success)
     throw new Error('Browser returned an invalid or empty source response.');
   const page = parsed.data;
-  progress('Source captured. Writing a brief grounded in the page.');
+  await progress('Source captured. Writing a brief grounded in the page.');
   signal.throwIfAborted();
   const completion = await fetch(
     `${config.baseUrl.replace(/\/$/, '')}/chat/completions`,

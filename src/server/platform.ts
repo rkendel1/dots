@@ -22,15 +22,22 @@ export class Platform {
   readonly computers: ComputerService;
   readonly intelligence?: CopilotKitIntelligence;
   readonly handler?: CopilotHonoApp;
-  constructor(
+  /**
+   * The Dot that owns the Slack channel, resolved once by `create`.
+   *
+   * It is passed in rather than read here because the durable Dot list is
+   * async and this constructor is not.
+   */
+  private constructor(
     readonly store: Store,
     readonly workspace: WorkspaceStore,
     readonly config: PlatformConfig,
+    channelDotId: string | undefined,
   ) {
     this.computers = new ComputerService(
       workspace,
       config,
-      () => store.settings().paused,
+      async () => (await store.settings()).paused,
     );
     this.pages = new PageService(workspace, () => {
       this.requireReady();
@@ -41,21 +48,16 @@ export class Platform {
       apiKey: config.intelligenceKey,
       apiUrl: config.intelligenceApiUrl,
       wsUrl: config.intelligenceWsUrl,
-      getLearningContainerId: learningSelector(
-        workspace,
-        config.slackDotId ?? workspace.dots()[0]?.id,
-      ),
+      getLearningContainerId: learningSelector(workspace, channelDotId),
     });
     const channels = [];
     if (config.slackChannel && config.slackTeam && config.slackUsers.length) {
-      const dotId = config.slackDotId ?? workspace.dots()[0].id;
-      if (!workspace.dot(dotId))
-        throw new Error('SLACK_DOT_ID does not identify an existing Dot.');
+      const dotId = channelDotId!;
       const slack = createSlackChannel({
         name: config.slackChannel,
         config,
         ownerId: workspace.ownerId,
-        paused: () => store.settings().paused,
+        paused: async () => (await store.settings()).paused,
         agent: () => new DotAgent(store, workspace, config, dotId, true),
       });
       channels.push(slack);
@@ -68,12 +70,10 @@ export class Platform {
       }),
       agents: async () =>
         Object.fromEntries(
-          workspace
-            .dots()
-            .map((dot) => [
-              dot.id,
-              new DotAgent(store, workspace, config, dot.id),
-            ]),
+          (await workspace.dots()).map((dot) => [
+            dot.id,
+            new DotAgent(store, workspace, config, dot.id),
+          ]),
         ),
       channels,
       generateThreadNames: true,
@@ -83,6 +83,28 @@ export class Platform {
       basePath: '/api/copilotkit',
       cors: { origin: [] },
     });
+  }
+  /**
+   * Build the platform, resolving the channel Dot from durable state first.
+   *
+   * The Slack Dot check still fails fast, before any listener starts, exactly as
+   * the constructor version did.
+   */
+  static async create(
+    store: Store,
+    workspace: WorkspaceStore,
+    config: PlatformConfig,
+  ) {
+    const dots = await workspace.dots();
+    const channelDotId = config.slackDotId ?? dots[0]?.id;
+    if (
+      config.slackChannel &&
+      config.slackTeam &&
+      config.slackUsers.length &&
+      !dots.some((dot) => dot.id === channelDotId)
+    )
+      throw new Error('SLACK_DOT_ID does not identify an existing Dot.');
+    return new Platform(store, workspace, config, channelDotId);
   }
   setup() {
     return setupStatus(
@@ -115,7 +137,7 @@ export class Platform {
   }
   async createConversation(dotId: string, title: string) {
     this.requireReady();
-    if (!this.workspace.dot(dotId)) throw new Error('Dot not found.');
+    if (!(await this.workspace.dot(dotId))) throw new Error('Dot not found.');
     const id = randomUUID();
     try {
       await this.intelligence!.createThread({
@@ -133,7 +155,7 @@ export class Platform {
   }
   async history(threadId: string): Promise<string> {
     this.requireReady();
-    this.workspace.requireThread(threadId);
+    await this.workspace.requireThread(threadId);
     const history = await this.intelligence!.getThreadMessages({
       threadId,
       userId: this.workspace.ownerId,
@@ -161,7 +183,7 @@ export class Platform {
         .json()
         .catch(() => null);
     try {
-      validateRuntimeScope(request, this.workspace, body);
+      await validateRuntimeScope(request, this.workspace, body);
     } catch (error) {
       return Response.json(
         {
@@ -182,7 +204,7 @@ export class Platform {
     metadata?: Record<string, unknown>,
   ): Promise<string> {
     this.requireReady();
-    const thread = this.workspace.requireThread(threadId);
+    const thread = await this.workspace.requireThread(threadId);
     return runThreadTurn(
       this.config.runtimeUrl,
       this.config.ownerToken

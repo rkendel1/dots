@@ -1,0 +1,148 @@
+flow_version 1
+
+app OpenDots {
+  collection settings {
+    name: text
+    paused: boolean
+    researchAllowed: boolean
+    memoryAllowed: boolean
+  }
+
+  collection spaces {
+    id: text
+    name: text
+    description: text
+    createdAt: datetime
+  }
+
+  collection dots {
+    id: text
+    spaceId: ref spaces
+    name: text
+    instructions: text
+    researchAllowed: boolean
+    memoryAllowed: boolean
+    createdAt: datetime
+    learningContainerId: text?
+    skillDeliveryEnabled: boolean
+  }
+
+  collection dot_space_grants {
+    dotId: ref dots
+    spaceId: ref spaces
+  }
+
+  collection pages {
+    id: text
+    spaceId: ref spaces
+    parentId: ref pages
+    title: text
+    content: text
+    revision: integer
+    createdAt: datetime
+    updatedAt: datetime
+    sourceThreadId: text?
+  }
+
+  collection page_reviews {
+    pageId: ref pages
+    spaceId: ref spaces
+  }
+
+  collection thread_bindings {
+    id: text
+    dotId: ref dots
+    ownerId: text
+    title: text
+    createdAt: datetime
+    learningContainerId: text?
+  }
+
+  collection page_threads {
+    pageId: ref pages
+    dotId: ref dots
+    threadId: text
+    ready: boolean
+    leaseUntil: datetime
+    index threadId using unique threadId
+  }
+
+  collection page_thread_ids {
+    threadId: text
+  }
+
+  collection tasks {
+    id: text
+    prompt: text
+    status: enum(queued, running, paused, completed, failed, cancelled)
+    intervalSeconds: integer?
+    nextRunAt: datetime?
+    createdAt: datetime
+    updatedAt: datetime
+    error: text?
+    lease: text?
+    leaseUntil: datetime?
+  }
+
+  collection task_threads {
+    taskId: ref tasks
+    threadId: text
+  }
+
+  collection runs {
+    id: text
+    taskId: ref tasks
+    status: text
+    startedAt: datetime
+    finishedAt: datetime?
+    result: json?
+    error: text?
+  }
+
+  collection task_events {
+    taskId: ref tasks
+    runId: text?
+    text: text
+    createdAt: datetime
+    seq: integer
+  }
+
+  collection memories {
+    id: text
+    text: text
+    createdAt: datetime
+  }
+
+  collection calls {
+    id: text
+    threadId: text
+    startedAt: datetime
+    endedAt: datetime?
+    status: enum(connecting, active, ended, failed)
+    transcript: text
+    error: text?
+    anchorMessageId: text?
+  }
+
+  collection captures {
+    threadId: text
+    value: json
+  }
+
+  collection computer_permissions {
+    dotId: ref dots
+    enabled: boolean
+    browser: boolean
+    files: boolean
+    shell: boolean
+  }
+
+  collection computer_audit {
+    id: text
+    dotId: ref dots
+    action: text
+    actor: text
+    outcome: text
+    createdAt: datetime
+  }
+}

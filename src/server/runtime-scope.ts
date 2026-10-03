@@ -1,9 +1,9 @@
 import { WorkspaceStore } from './workspace.js';
-export function validateRuntimeScope(
+export async function validateRuntimeScope(
   request: Request,
   workspace: WorkspaceStore,
   body: unknown,
-): void {
+): Promise<void> {
   const url = new URL(request.url);
   const prefix = '/api/copilotkit/';
   const deny = () => {
@@ -63,7 +63,7 @@ export function validateRuntimeScope(
   for (const candidate of [agentId, bodyAgent, queryAgent]) {
     if (
       candidate &&
-      (!workspace.dot(candidate) || (agentId && candidate !== agentId))
+      (!(await workspace.dot(candidate)) || (agentId && candidate !== agentId))
     )
       return deny();
   }
@@ -75,7 +75,7 @@ export function validateRuntimeScope(
   ]) {
     if (candidate) {
       if (threadId && candidate !== threadId) return deny();
-      workspace.requireThread(candidate, agentId);
+      await workspace.requireThread(candidate, agentId);
     }
   }
 }

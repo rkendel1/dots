@@ -3,18 +3,19 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHmac } from 'node:crypto';
-import { WorkspaceStore } from '../src/server/workspace.js';
+import { memoryWorkspace, fileWorkspace } from './helpers/workspace.js';
 import { ComputerService } from '../src/server/computer-service.js';
 import { computerInputs } from '../src/shared/computer-types.js';
 import { computerTools } from '../src/server/computer-tools.js';
-const stores: WorkspaceStore[] = [];
+const states: { close(): void }[] = [];
 afterEach(() => {
-  for (const store of stores.splice(0)) store.close();
+  for (const state of states.splice(0)) state.close();
 });
-function fixture(deadline = 1000) {
-  const workspace = new WorkspaceStore(':memory:', 'owner');
-  stores.push(workspace);
-  const id = workspace.dots()[0].id;
+async function fixture(deadline = 1000) {
+  const opened = await memoryWorkspace('owner');
+  const workspace = opened.store;
+  states.push(opened.state);
+  const id = (await workspace.dots())[0]!.id;
   const calls: { url: string; init?: RequestInit }[] = [];
   let paused = false;
   let endpoint: string | undefined;
@@ -27,7 +28,7 @@ function fixture(deadline = 1000) {
     calls.push({ url, init });
     if (url.endsWith('/computers'))
       return Response.json({
-        computers: workspace.dots().map((dot) => ({
+        computers: (await workspace.dots()).map((dot) => ({
           botId: dot.id,
           container: `opendots-computer-${dot.id}`,
           status: 'running',
@@ -91,37 +92,47 @@ function fixture(deadline = 1000) {
     },
   };
 }
-it('defaults every permission off and persists policy and metadata-only audit across restart', () => {
+it('defaults every permission off and persists policy and metadata-only audit across restart', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'computers-'));
-  const path = join(dir, 'db');
-  let workspace = new WorkspaceStore(path, 'owner');
-  const id = workspace.dots()[0].id;
-  expect(workspace.computers.permissions(id)).toEqual({
+  const path = join(dir, 'state');
+  const first = fileWorkspace(path);
+  states.push(first.state);
+  const workspace = first.store;
+  await workspace.bootstrap();
+  const id = (await workspace.dots())[0]!.id;
+  expect(await workspace.computers.permissions(id)).toEqual({
     enabled: false,
     browser: false,
     files: false,
     shell: false,
   });
-  workspace.computers.patch(id, { enabled: true, files: true });
-  const audit = workspace.computers.begin(id, 'files_write', 'agent');
-  workspace.computers.finish(audit, 'succeeded');
-  workspace.close();
-  workspace = new WorkspaceStore(path, 'owner');
-  expect(workspace.computers.permissions(id).files).toBe(true);
-  expect(workspace.computers.audit(id)[0]).toMatchObject({
+  await workspace.computers.patch(id, { enabled: true, files: true });
+  const audit = await workspace.computers.begin(id, 'files_write', 'agent');
+  await workspace.computers.finish(audit, 'succeeded');
+  // Closing the handle releases the process lock, which is what lets the same
+  // path be reopened at all.
+  first.close();
+
+  const reopened = fileWorkspace(path);
+  states.push(reopened.state);
+  expect((await reopened.store.computers.permissions(id)).files).toBe(true);
+  // The audit row carries metadata only: no result or payload is persisted.
+  expect((await reopened.store.computers.audit(id))[0]).toMatchObject({
     action: 'files_write',
     outcome: 'succeeded',
   });
-  workspace.close();
+  reopened.close();
   rmSync(dir, { recursive: true });
 });
 it('status never provisions and actions use per-Dot derived credentials with audit before dispatch', async () => {
-  const f = fixture();
+  const f = await fixture();
   f.config.computerToken = '  master-secret  ';
   await f.service.status(f.id);
   expect(f.calls.every((call) => !call.url.endsWith('/ensure'))).toBe(true);
   f.handle(async () => {
-    expect(f.workspace.computers.audit(f.id)[0].outcome).toBe('pending');
+    expect((await f.workspace.computers.audit(f.id))[0]!.outcome).toBe(
+      'pending',
+    );
     return Response.json({ text: f.config.computerToken.trim() });
   });
   expect(
@@ -134,8 +145,8 @@ it('status never provisions and actions use per-Dot derived credentials with aud
   expect(new Headers(request.init?.headers).get('x-openbot-bot-id')).toBe(f.id);
   expect(request.init?.redirect).toBe('error');
   f.handle(async () => Response.json({ text: 'result' }));
-  const other = f.workspace.createDot(
-    f.workspace.spaces()[0].id,
+  const other = await f.workspace.createDot(
+    (await f.workspace.spaces())[0]!.id,
     'Other',
     '',
     true,
@@ -150,7 +161,7 @@ it('status never provisions and actions use per-Dot derived credentials with aud
   expect(last.url).toContain(other.id);
 });
 it('rejects foreign targets, nonexistent Dots, traversal, unexpected inputs and agent human controls', async () => {
-  const f = fixture();
+  const f = await fixture();
   f.setEndpoint('http://attacker.test:4100');
   await expect(f.service.action(f.id, 'read', {})).rejects.toThrow('endpoint');
   expect(f.calls).toHaveLength(1);
@@ -176,7 +187,7 @@ it('rejects foreign targets, nonexistent Dots, traversal, unexpected inputs and 
   ).rejects.toThrow('owner-only');
 });
 it('checks current permissions and global pause and records failure without sensitive inputs', async () => {
-  const f = fixture();
+  const f = await fixture();
   f.workspace.computers.patch(f.id, { shell: false });
   await expect(
     f.service.action(f.id, 'exec', { command: 'sensitive command' }, 'agent'),
@@ -190,11 +201,13 @@ it('checks current permissions and global pause and records failure without sens
     'sensitive',
   );
   expect(
-    f.workspace.computers.audit(f.id).every((a) => a.outcome === 'failed'),
+    (await f.workspace.computers.audit(f.id)).every(
+      (a) => a.outcome === 'failed',
+    ),
   ).toBe(true);
 });
 it('cancels in-flight actions on revocation and bounds upstream deadlines', async () => {
-  const f = fixture(200);
+  const f = await fixture(200);
   f.handle(
     async (_url, init) =>
       new Promise((_resolve, reject) => {
@@ -212,11 +225,13 @@ it('cancels in-flight actions on revocation and bounds upstream deadlines', asyn
     'cancelled or timed out',
   );
   expect(
-    f.workspace.computers.audit(f.id).every((a) => a.outcome === 'failed'),
+    (await f.workspace.computers.audit(f.id)).every(
+      (a) => a.outcome === 'failed',
+    ),
   ).toBe(true);
 });
 it('preserves recovery handback after permissions are revoked; upstream failures are sanitized', async () => {
-  const f = fixture();
+  const f = await fixture();
   f.workspace.computers.patch(f.id, { enabled: false, browser: false });
   await f.service.control(f.id, 'release');
   expect(f.calls.some((call) => call.url.endsWith('/control/release'))).toBe(
@@ -233,7 +248,7 @@ it('preserves recovery handback after permissions are revoked; upstream failures
   );
 });
 it('binds tools to the current Dot without exposing human or policy controls', async () => {
-  const f = fixture();
+  const f = await fixture();
   const check = vi.fn();
   const tools = computerTools(
     f.service,
@@ -251,20 +266,23 @@ it('binds tools to the current Dot without exposing human or policy controls', a
   expect(check).toHaveBeenCalled();
   expect(f.calls.at(-1)?.url).toContain(f.id);
 });
-it('bounds completed audit storage while preserving pending work', () => {
-  const f = fixture();
-  const pending = f.workspace.computers.begin(f.id, 'exec', 'agent');
+it('bounds completed audit storage while preserving pending work', async () => {
+  const f = await fixture();
+  const pending = await f.workspace.computers.begin(f.id, 'exec', 'agent');
   for (let i = 0; i < 1010; i++)
-    f.workspace.computers.finish(
-      f.workspace.computers.begin(f.id, 'read', 'owner'),
+    await f.workspace.computers.finish(
+      await f.workspace.computers.begin(f.id, 'read', 'owner'),
       'succeeded',
     );
-  f.workspace.computers.finish(pending, 'failed');
-  expect(f.workspace.computers.audit(f.id)).toHaveLength(50);
+  await f.workspace.computers.finish(pending, 'failed');
+  const rows = await f.workspace.computers.audit(f.id);
+  expect(rows).toHaveLength(50);
+  // The read window is the newest 50; the trim keeps 1000 finished rows per Dot.
+  expect(rows.every((row) => row.outcome === 'succeeded')).toBe(true);
 });
 
 it('accepts an uppercase namespace while preserving exact container identity', async () => {
-  const f = fixture();
+  const f = await fixture();
   const config = { ...f.config, computerNamespace: 'MyDots' };
   const transport: typeof fetch = async (input, init) => {
     if (String(input).endsWith('/computers'))
@@ -293,7 +311,7 @@ it('accepts an uppercase namespace while preserving exact container identity', a
 });
 
 it('gives agents a safe recovery instruction for stale browser or control conflicts', async () => {
-  const f = fixture();
+  const f = await fixture();
   f.handle(async () =>
     Response.json({ error: f.config.computerToken }, { status: 409 }),
   );
@@ -303,5 +321,5 @@ it('gives agents a safe recovery instruction for stale browser or control confli
   await expect(
     f.service.action(f.id, 'navigate', { url: 'https://example.com' }, 'agent'),
   ).rejects.not.toThrow(f.config.computerToken);
-  expect(f.workspace.computers.audit(f.id)[0].outcome).toBe('failed');
+  expect((await f.workspace.computers.audit(f.id))[0]!.outcome).toBe('failed');
 });

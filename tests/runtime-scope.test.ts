@@ -1,37 +1,37 @@
 import { expect, it } from 'vitest';
 import { validateRuntimeScope } from '../src/server/runtime-scope.js';
-import { WorkspaceStore } from '../src/server/workspace.js';
+import { memoryWorkspace } from './helpers/workspace.js';
 import { setupStatus } from '../src/server/platform-config.js';
-it('blocks unbound cross-Dot run and inspector routes before contacting Intelligence', () => {
-  const store = new WorkspaceStore(':memory:', 'owner');
-  const dot = store.dots()[0];
-  store.bindThread('thread-a', dot.id, 'A');
-  expect(() =>
+it('blocks unbound cross-Dot run and inspector routes before contacting Intelligence', async () => {
+  const store = await memoryWorkspace();
+  const dot = (await store.store.dots())[0]!;
+  await store.store.bindThread('thread-a', dot.id, 'A');
+  await expect(
     validateRuntimeScope(
       new Request(`http://localhost/api/copilotkit/agent/${dot.id}/run`, {
         method: 'POST',
       }),
-      store,
+      store.store,
       { threadId: 'other-owner' },
     ),
-  ).toThrow();
-  expect(() =>
+  ).rejects.toThrow();
+  await expect(
     validateRuntimeScope(
       new Request('http://localhost/api/copilotkit/inspect/threads/foreign'),
-      store,
+      store.store,
       null,
     ),
-  ).toThrow();
-  expect(() =>
+  ).rejects.toThrow();
+  await expect(
     validateRuntimeScope(
       new Request(`http://localhost/api/copilotkit/agent/${dot.id}/run`, {
         method: 'POST',
       }),
-      store,
+      store.store,
       { threadId: 'thread-a' },
     ),
-  ).not.toThrow();
-  store.close();
+  ).resolves.toBeUndefined();
+  store.state.close();
 });
 it('reports setup honestly without a standalone agent fallback', () => {
   const status = setupStatus({
@@ -45,10 +45,10 @@ it('reports setup honestly without a standalone agent fallback', () => {
   expect(status.slack).toBe('not_configured');
   expect(status.missing).toContain('INTELLIGENCE_API_KEY');
 });
-it('rejects stop scope bypasses and misleading prefixes while allowing canonical owned routes', () => {
-  const store = new WorkspaceStore(':memory:', 'owner');
-  const dot = store.dots()[0];
-  store.bindThread('bound', dot.id, 'Bound');
+it('rejects stop scope bypasses and misleading prefixes while allowing canonical owned routes', async () => {
+  const store = await memoryWorkspace();
+  const dot = (await store.store.dots())[0]!;
+  await store.store.bindThread('bound', dot.id, 'Bound');
   for (const path of [
     `/agent/${dot.id}/stop/foreign`,
     '/threads/bound/threads/foreign/messages',
@@ -57,32 +57,32 @@ it('rejects stop scope bypasses and misleading prefixes while allowing canonical
     '/threads//bound/messages',
     '/threads/bound%2Fthreads%2Fforeign/messages',
   ]) {
-    expect(() =>
+    await expect(
       validateRuntimeScope(
         new Request(`http://localhost/api/copilotkit${path}`, {
           method: 'POST',
         }),
-        store,
+        store.store,
         { threadId: 'bound' },
       ),
-    ).toThrow();
+    ).rejects.toThrow();
   }
-  expect(() =>
+  await expect(
     validateRuntimeScope(
       new Request(
         `http://localhost/api/copilotkit/agent/${dot.id}/stop/bound`,
         { method: 'POST' },
       ),
-      store,
+      store.store,
       {},
     ),
-  ).not.toThrow();
-  expect(() =>
+  ).resolves.toBeUndefined();
+  await expect(
     validateRuntimeScope(
       new Request('http://localhost/api/copilotkit/threads/bound/messages'),
-      store,
+      store.store,
       null,
     ),
-  ).not.toThrow();
-  store.close();
+  ).resolves.toBeUndefined();
+  store.state.close();
 });

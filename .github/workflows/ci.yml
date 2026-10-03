@@ -20,3 +20,104 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  # Proves OpenDots has no hidden dependency on the legacy database (Phase 7).
+  #
+  # The runtime tests are run with `data/opendots.sqlite` renamed out of the way,
+  # and the guard is asserted as a separate step so a failure names the invariant
+  # that broke rather than just "some test failed". The file is moved, not
+  # deleted, and a trap restores it — a developer's checkout is never damaged,
+  # and the migration suite still has its source afterwards.
+  no-sqlite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      - name: Rename the legacy database out of the way
+        run: |
+          set -euo pipefail
+          if [ -f data/opendots.sqlite ]; then
+            mv data/opendots.sqlite data/opendots.sqlite.disabled
+          fi
+          test ! -f data/opendots.sqlite
+          echo "legacy database is absent"
+
+      - name: Runtime works with no SQLite present
+        run: npx vitest run tests/runtime-cutover.test.ts
+
+      # Identifiers that cannot plausibly appear in prose, so a plain grep suffices.
+      #
+      # Two things are deliberately NOT in this pattern, because runtime modules
+      # legitimately mention them when documenting what FeltDB replaced:
+      #
+      #   - the word "SQLite"  — e.g. "SQLite's UPDATE on an absent row"
+      #   - SELECT/INSERT/UPDATE/DELETE keywords — e.g. "`INSERT OR IGNORE`"
+      #
+      # Those are checked properly by tests/runtime-sqlite-guard.test.ts, which
+      # strips comments and string literals before scanning, and which is run in
+      # the very next step. This step is a fast, independent cross-check.
+      - name: 'Runtime guard: zero SQLite identifiers in src/server'
+        run: |
+          set -euo pipefail
+          if rg -n --no-heading \
+            'node:sqlite|DatabaseSync|DATABASE_PATH|CREATE TABLE|PRAGMA' \
+            src/server; then
+            echo "::error::runtime source references SQLite"
+            exit 1
+          fi
+          echo "src/server is free of SQLite identifiers"
+
+      - name: 'Static guards: no SQL in executable code, 18 collections, isolated migration'
+        run: npx vitest run tests/runtime-sqlite-guard.test.ts
+
+      # Always, so a failed step above still hands back a usable checkout and the
+      # migration suite keeps its source.
+      - name: Restore the legacy database
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f data/opendots.sqlite.disabled ]; then
+            mv data/opendots.sqlite.disabled data/opendots.sqlite
+          fi
+          test -f data/opendots.sqlite
+
+      - name: The full suite still passes with the database back
+        run: npx vitest run tests/migrate-sqlite.test.ts
+
+  # `feltdb.flow` is the authoritative declaration of what OpenDots is, so it is
+  # validated by FeltDB's own tooling rather than by a parser in this repository.
+  #
+  # The CLI is invoked through `node node_modules/@feltdb/core/bin/feltdb.js`,
+  # never `npx feltdb`: a runner can have a globally installed FeltDB CLI of a
+  # different version on PATH, and that would silently validate against a
+  # grammar this repository has not pinned.
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+
+      - name: Validate feltdb.flow with the real FeltDB CLI
+        run: node node_modules/@feltdb/core/bin/feltdb.js validate feltdb.flow
+
+      # Contract / runtime registry / migration planner must agree. The failure
+      # names the offending collection and both sides rather than reporting a
+      # generic assertion diff.
+      - name: 'Contract drift: feltdb.flow ↔ runtime ↔ migration planner'
+        run: npx vitest run tests/contract-feltdb-flow.test.ts
+
+      # The acceptance claim: OpenDots serves state across a restart from the
+      # contract and FeltDB alone, and never creates data/opendots.sqlite.
+      - name: 'Acceptance: runs from the contract with SQLite absent'
+        run: npx vitest run tests/contract-acceptance.test.ts

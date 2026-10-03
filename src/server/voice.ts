@@ -22,25 +22,25 @@ export class VoiceService {
     >,
     private transport: typeof fetch = fetch,
   ) {}
-  private requireCall(id: string) {
-    const call = this.platform.workspace.call(id);
+  private async requireCall(id: string) {
+    const call = await this.platform.workspace.call(id);
     if (call.endedAt) throw new Error('This call has ended.');
-    if (this.platform.store.settings().paused)
+    if ((await this.platform.store.settings()).paused)
       throw new Error('Dot is paused.');
     return call;
   }
   async begin(threadId: string, sdp: string, signal: AbortSignal) {
     this.platform.requireReady();
-    this.platform.workspace.requireThread(threadId);
+    await this.platform.workspace.requireThread(threadId);
     if (!this.platform.setup().voice)
       throw new Error('Voice setup required: VOICE_API_KEY and VOICE_MODEL.');
-    if (this.platform.store.settings().paused)
+    if ((await this.platform.store.settings()).paused)
       throw new Error('Dot is paused.');
     if (!sdp.startsWith('v=0') || !sdp.includes('m=audio'))
       throw new Error('An audio WebRTC SDP offer is required.');
     if (this.jobs.size)
       throw new Error('End the current call before starting another.');
-    const call = this.platform.workspace.createCall(threadId);
+    const call = await this.platform.workspace.createCall(threadId);
     const controller = new AbortController();
     const deadline = setTimeout(() => {
       void this.expire(call.id, 'Call connection expired before activation.');
@@ -48,9 +48,10 @@ export class VoiceService {
     deadline.unref();
     this.jobs.set(call.id, { controller, calls: new Map(), deadline });
     const timeout = AbortSignal.timeout(20_000);
-    const dot = this.platform.workspace.dot(
-      this.platform.workspace.requireThread(threadId).dotId,
-    )!;
+    const dot = await this.platform.workspace.dot(
+      (await this.platform.workspace.requireThread(threadId)).dotId,
+    );
+    if (!dot) throw new Error('Specialist Dot not found.');
     try {
       const combined = AbortSignal.any([signal, timeout, controller.signal]);
       const history = await new Promise<string>((resolve, reject) => {
@@ -146,7 +147,7 @@ export class VoiceService {
       clearTimeout(deadline);
       await this.hangup(call.id);
       this.jobs.delete(call.id);
-      this.platform.workspace.setCall(
+      await this.platform.workspace.setCall(
         call.id,
         'failed',
         '',
@@ -155,8 +156,8 @@ export class VoiceService {
       throw error;
     }
   }
-  activate(id: string) {
-    const existingCall = this.requireCall(id);
+  async activate(id: string) {
+    const existingCall = await this.requireCall(id);
     if (existingCall.status === 'active') return existingCall;
     const job = this.jobs.get(id);
     if (!job) throw new Error('Call session expired.');
@@ -172,7 +173,7 @@ export class VoiceService {
     toolCallId: string,
     request: string,
   ): Promise<string> {
-    const call = this.requireCall(id);
+    const call = await this.requireCall(id);
     const job = this.jobs.get(id);
     if (!job) throw new Error('Call session expired; start a new call.');
     const existing = job.calls.get(toolCallId);
@@ -190,11 +191,11 @@ export class VoiceService {
     return pending;
   }
   async end(id: string, transcript: string) {
-    const previous = this.platform.workspace.call(id);
+    const previous = await this.platform.workspace.call(id);
     if (previous.endedAt) {
       if (
         transcript &&
-        this.platform.workspace.saveLateTranscript(id, transcript)
+        (await this.platform.workspace.saveLateTranscript(id, transcript))
       )
         await this.syncReceipt(id, transcript);
       return this.platform.workspace.call(id);
@@ -203,16 +204,16 @@ export class VoiceService {
     job?.controller.abort();
     if (job) clearTimeout(job.deadline);
     this.jobs.delete(id);
-    this.platform.workspace.setCall(id, 'ended', transcript);
+    await this.platform.workspace.setCall(id, 'ended', transcript);
     await this.hangup(id, job?.providerId);
     if (job) await Promise.allSettled(job.calls.values());
     await this.syncReceipt(id, transcript);
     return this.platform.workspace.call(id);
   }
   private async syncReceipt(id: string, transcript: string) {
-    const call = this.platform.workspace.call(id);
-    if (this.platform.store.settings().paused) {
-      this.platform.workspace.setCallError(
+    const call = await this.platform.workspace.call(id);
+    if ((await this.platform.store.settings()).paused) {
+      await this.platform.workspace.setCallError(
         id,
         'Transcript saved locally; pending Intelligence sync until workspace resumes.',
       );
@@ -226,16 +227,16 @@ export class VoiceService {
         { opendotsSource: 'voice_receipt' },
       );
     } catch {
-      this.platform.workspace.setCallError(
+      await this.platform.workspace.setCallError(
         id,
         'Call ended; its local receipt is saved, but Intelligence transcript sync failed.',
       );
     }
   }
   async resumePending() {
-    for (const call of this.platform.workspace.calls())
+    for (const call of await this.platform.workspace.calls())
       if (call.error?.includes('pending Intelligence sync')) {
-        this.platform.workspace.setCallError(call.id, null);
+        await this.platform.workspace.setCallError(call.id, null);
         await this.syncReceipt(call.id, call.transcript);
       }
   }
@@ -253,7 +254,7 @@ export class VoiceService {
         },
       );
       if (!response.ok && response.status !== 404)
-        this.platform.workspace.setCallError(
+        await this.platform.workspace.setCallError(
           id,
           `The local call stopped, but provider hangup returned HTTP ${response.status}.`,
         );
@@ -265,7 +266,7 @@ export class VoiceService {
           : ['AbortError', 'TypeError', 'Error'].includes(name)
             ? `failed (${name})`
             : 'failed (transport error)';
-      this.platform.workspace.setCallError(
+      await this.platform.workspace.setCallError(
         id,
         `The local call stopped, but provider hangup ${reason}.`,
       );
@@ -276,12 +277,23 @@ export class VoiceService {
     if (!job) return;
     job.controller.abort();
     clearTimeout(job.deadline);
-    this.platform.workspace.setCall(id, 'failed', '', reason);
+    await this.platform.workspace.setCall(id, 'failed', '', reason);
     await this.hangup(id);
     this.jobs.delete(id);
   }
-  abortAll() {
-    for (const id of this.jobs.keys())
-      void this.expire(id, 'Call stopped because the workspace was paused.');
+  /**
+   * Expire every live call.
+   *
+   * Awaitable because expiring a call now writes through the durable store.
+   * Callers must await it so an expiry is not left racing a later `end()` on
+   * the same call, which is how a paused workspace stops a call from keeping
+   * its transcript.
+   */
+  async abortAll() {
+    await Promise.all(
+      [...this.jobs.keys()].map((id) =>
+        this.expire(id, 'Call stopped because the workspace was paused.'),
+      ),
+    );
   }
 }

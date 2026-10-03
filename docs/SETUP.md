@@ -1,6 +1,6 @@
 # Running the template
 
-OpenDots runs a React app and a Node server. The server stores pages, Space and Dot configuration, and thread bindings in SQLite and connects to your configured conversation, model, and messaging services.
+OpenDots runs a React app and a Node server. The server stores pages, Space and Dot configuration, and thread bindings in FeltDB — its sole runtime persistence substrate — and connects to your configured conversation, model, and messaging services. SQLite is legacy: it is read only by the one-time migration command described in [STORE-FELTDB-PHASE7.md](STORE-FELTDB-PHASE7.md), and never by the running application.
 
 ## Local development
 
@@ -27,18 +27,40 @@ Open http://127.0.0.1:4310. Keep the server running for background work.
 
 Edit `.env` on the server and restart after changes:
 
-| Variable                                      | Purpose                                                   |
-| --------------------------------------------- | --------------------------------------------------------- |
-| `INTELLIGENCE_API_KEY`                        | Project credential for conversation persistence           |
-| `INTELLIGENCE_API_URL`, `INTELLIGENCE_WS_URL` | Endpoint overrides for your Intelligence deployment       |
-| `OPENAI_API_KEY`, `OPENAI_MODEL`              | Model credential and model identifier                     |
-| `OPENAI_BASE_URL`                             | Compatible model API endpoint                             |
-| `OWNER_ID`                                    | Stable identity used for this deployment's conversations  |
-| `DATABASE_PATH`                               | SQLite file containing pages, workspace and work metadata |
-| `OWNER_TOKEN`                                 | Application access token; required for external bindings  |
-| `APP_ORIGIN`                                  | Exact browser origin when using a proxy or custom domain  |
+| Variable                                      | Purpose                                                                      |
+| --------------------------------------------- | ---------------------------------------------------------------------------- |
+| `INTELLIGENCE_API_KEY`                        | Project credential for conversation persistence                              |
+| `INTELLIGENCE_API_URL`, `INTELLIGENCE_WS_URL` | Endpoint overrides for your Intelligence deployment                          |
+| `OPENAI_API_KEY`, `OPENAI_MODEL`              | Model credential and model identifier                                        |
+| `OPENAI_BASE_URL`                             | Compatible model API endpoint                                                |
+| `OWNER_ID`                                    | Stable identity used for this deployment's conversations                     |
+| `FELTDB_PATH`                                 | Durable state directory; defaults to `data/opendots-state`                   |
+| `FELTDB_NAMESPACE`                            | Collection namespace; defaults to the app identity declared in `feltdb.flow` |
+| `OWNER_TOKEN`                                 | Application access token; required for external bindings                     |
+| `APP_ORIGIN`                                  | Exact browser origin when using a proxy or custom domain                     |
 
-The model environment variable names follow the configured provider adapter. Provider credentials belong in `.env`, not client-side variables or source code. Conversation history lives in the configured Intelligence project; copying the SQLite file alone does not back up that history.
+The model environment variable names follow the configured provider adapter. Provider credentials belong in `.env`, not client-side variables or source code. Conversation history lives in the configured Intelligence project; copying the FeltDB state directory alone does not back up that history.
+
+## The application contract
+
+`feltdb.flow` at the repository root is the authoritative declaration of OpenDots: the application identity and the durable collections it owns. Startup reads it, and refuses to run if the runtime uses a collection it does not declare.
+
+Validate it after changing it:
+
+```sh
+node node_modules/@feltdb/core/bin/feltdb.js validate feltdb.flow
+```
+
+Use that exact invocation rather than `npx feltdb`, which can resolve a globally installed FeltDB CLI of a different version and validate against an unpinned grammar. See [docs/CONTRACT-FELTDB-FLOW.md](CONTRACT-FELTDB-FLOW.md).
+
+The legacy `data/opendots.sqlite` file is not part of the contract and is never read at runtime.
+
+OpenDots uses FeltDB as its durable runtime state authority. `feltdb.flow` is the authoritative application contract for OpenDots' FeltDB collections. SQLite is retained only as a legacy migration source and is not part of runtime operation.
+
+Two related boundaries are deliberate:
+
+- Domain key schemes (page, grant, event and review keys) remain implementation-level TypeScript, because the installed FlowSpec format does not currently express record-key expressions. The contract declares the fields those keys are composed from.
+- The Hono API is implemented by the domain stores rather than generated from FlowSpec, because the format does not currently express service or API declarations.
 
 ## Pages and page conversations
 
@@ -50,7 +72,7 @@ Open a page's chat and choose a specialist with access to that Space. Grant acce
 
 Use the conversation's save-to-page action to create a document from its saved text history. This requires a working conversation service. Pages retain a link to the source conversation, and page links in chat open the document workspace.
 
-Back up both storage layers: SQLite contains page content and thread bindings; the Intelligence project contains conversation history. The template does not include multi-user page sharing, realtime collaboration, file uploads, or arbitrary interactive embeds.
+Back up both storage layers: the FeltDB state directory (`FELTDB_PATH`) contains page content and thread bindings; the Intelligence project contains conversation history. The legacy `data/opendots.sqlite` file is a migration source only and is not part of either backup. The template does not include multi-user page sharing, realtime collaboration, file uploads, or arbitrary interactive embeds.
 
 ## Browser tool
 

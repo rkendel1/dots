@@ -3,6 +3,7 @@ import { reportChannelFailure, safeFailure } from './slack-channel.js';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Store } from './store.js';
+import { openFeltState } from './felt/state.js';
 import { Runner } from './runner.js';
 import { createApp } from './app.js';
 import { WorkspaceStore } from './workspace.js';
@@ -18,12 +19,18 @@ if (
   throw new Error(
     'External binding requires an OWNER_TOKEN of at least 24 characters.',
   );
-const database = process.env.DATABASE_PATH ?? 'data/opendots.sqlite';
-const store = new Store(database);
+// The durable state is the single authority for every application domain. It is
+// opened before the listener starts, so a second process fails fast instead of
+// serving against state it does not own.
+const state = openFeltState();
+const store = new Store(state.db);
 const workspace = new WorkspaceStore(
-  database,
   process.env.OWNER_ID ?? 'opendots-owner',
+  state.db,
 );
+// The first-run defaults are durable-state writes, so they are created before
+// anything reads them. Startup still fails fast here, before the listener binds.
+await workspace.bootstrap();
 const config: PlatformConfig = {
   intelligenceKey: process.env.INTELLIGENCE_API_KEY,
   intelligenceApiUrl: process.env.INTELLIGENCE_API_URL || undefined,
@@ -50,7 +57,7 @@ const config: PlatformConfig = {
   runtimeUrl: `http://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/api/copilotkit`,
   ownerToken,
 };
-const platform = new Platform(store, workspace, config);
+const platform = await Platform.create(store, workspace, config);
 const researchConfig = {
   mode: 'live' as const,
   apiKey: config.apiKey,
@@ -63,7 +70,7 @@ const runner = new Runner(
   store,
   researchConfig,
   async (claim, _memories, signal, progress) => {
-    const threadId = workspace.taskThread(claim.id);
+    const threadId = await workspace.taskThread(claim.id);
     if (!threadId)
       throw new Error(
         'This legacy task has no Intelligence conversation. Create a new scheduled task from a conversation.',
@@ -119,6 +126,7 @@ const shutdown = createShutdown({
     new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
     ),
+  closeState: () => state.close(),
   exit: (code) => process.exit(code),
   report: (operation, error) =>
     reportChannelFailure(operation, [safeFailure(error)]),

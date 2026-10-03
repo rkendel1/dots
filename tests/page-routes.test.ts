@@ -1,20 +1,22 @@
 import { afterEach, expect, it } from 'vitest';
-import { Store } from '../src/server/store.js';
-import { WorkspaceStore } from '../src/server/workspace.js';
+import { memoryWorkspace } from './helpers/workspace.js';
+import { memoryStore } from './helpers/store.js';
 import { Platform } from '../src/server/platform.js';
 import { Runner } from '../src/server/runner.js';
 import { createApp } from '../src/server/app.js';
 const cleanup: (() => void)[] = [];
 afterEach(() => cleanup.splice(0).forEach((fn) => fn()));
-function fixture(ownerToken?: string) {
-  const store = new Store(':memory:');
-  const ws = new WorkspaceStore(':memory:', 'owner');
+async function fixture(ownerToken?: string) {
+  const handle = memoryStore();
+  const store = handle.store;
+  const opened = await memoryWorkspace();
+  const ws = opened.store;
   cleanup.push(() => {
-    store.close();
-    ws.close();
+    handle.close();
+    opened.state.close();
   });
   const config = { mode: 'live' as const, baseUrl: 'https://example.com' };
-  const platform = new Platform(store, ws, {
+  const platform = await Platform.create(store, ws, {
     baseUrl: config.baseUrl,
     voiceName: 'marin',
     slackUsers: [],
@@ -38,8 +40,8 @@ const request = (body: unknown, method = 'POST') => ({
 });
 
 it('saves Learning settings through the owner API and rejects malformed container IDs', async () => {
-  const { ws, app } = fixture();
-  const dot = ws.dots()[0];
+  const { ws, app } = await fixture();
+  const dot = (await ws.dots())[0]!;
   const body = {
     name: dot.name,
     instructions: dot.instructions,
@@ -51,7 +53,7 @@ it('saves Learning settings through the owner API and rejects malformed containe
   expect(
     (await app.request(`/api/dots/${dot.id}`, request(body, 'PUT'))).status,
   ).toBe(200);
-  expect(ws.dot(dot.id)).toMatchObject({
+  expect(await ws.dot(dot.id)).toMatchObject({
     learningContainerId: 'research',
     skillDeliveryEnabled: true,
   });
@@ -80,19 +82,19 @@ it('saves Learning settings through the owner API and rejects malformed containe
     learningContainerId: 'research',
     skillDeliveryEnabled: true,
   });
-  const privateApp = fixture('owner-secret');
+  const privateApp = await fixture('owner-secret');
   expect(
     (
       await privateApp.app.request(
-        `/api/dots/${privateApp.ws.dots()[0].id}`,
+        `/api/dots/${(await privateApp.ws.dots())[0]!.id}`,
         request(body, 'PUT'),
       )
     ).status,
   ).toBe(401);
 });
 it('supports manual pages without credentials and returns validation, scope and conflict statuses', async () => {
-  const { ws, app } = fixture();
-  const space = ws.spaces()[0].id;
+  const { ws, app } = await fixture();
+  const space = (await ws.spaces())[0]!.id;
   const path = `/api/spaces/${space}/pages`;
   expect((await app.request(path, request({ title: '' }))).status).toBe(400);
   expect((await app.request('/api/spaces/missing/pages')).status).toBe(404);
@@ -119,11 +121,11 @@ it('supports manual pages without credentials and returns validation, scope and 
     (
       await app.request(
         `${path}/${page.id}/conversation`,
-        request({ dotId: ws.dots()[0].id }),
+        request({ dotId: (await ws.dots())[0]!.id }),
       )
     ).status,
   ).toBe(503);
-  expect(ws.pages.get(space, page.id).content).toBe('First');
+  expect((await ws.pages.get(space, page.id)).content).toBe('First');
   expect(
     (
       await app.request(path, {
@@ -135,8 +137,8 @@ it('supports manual pages without credentials and returns validation, scope and 
   ).toBe(400);
 });
 it('keeps page routes behind owner authentication and browser origin checks', async () => {
-  const { ws, app } = fixture('owner-secret');
-  const path = `/api/spaces/${ws.spaces()[0].id}/pages`;
+  const { ws, app } = await fixture('owner-secret');
+  const path = `/api/spaces/${(await ws.spaces())[0]!.id}/pages`;
   expect((await app.request(path)).status).toBe(401);
   expect(
     (
@@ -160,9 +162,9 @@ it('keeps page routes behind owner authentication and browser origin checks', as
 });
 
 it('saves reviewed drafts once and rechecks the Dot’s Space access', async () => {
-  const { ws, app } = fixture();
-  const dot = ws.dots()[0];
-  ws.bindThread('review-thread', dot.id, 'Review');
+  const { ws, app } = await fixture();
+  const dot = (await ws.dots())[0]!;
+  await ws.bindThread('review-thread', dot.id, 'Review');
   const draft = {
     title: 'Launch brief',
     content: 'A reviewed draft.',
@@ -175,24 +177,28 @@ it('saves reviewed drafts once and rechecks the Dot’s Space access', async () 
   const saved = await first.json();
   const retry = await app.request(path, request(draft));
   expect((await retry.json()).id).toBe(saved.id);
-  expect(ws.pages.list(dot.spaceId)).toHaveLength(1);
-  const other = ws.createSpace('Other', '');
-  ws.updateDot(dot.id, { ...dot, spaceId: other.id, spaceIds: [other.id] });
+  expect(await ws.pages.list(dot.spaceId)).toHaveLength(1);
+  const other = await ws.createSpace('Other', '');
+  await ws.updateDot(dot.id, {
+    ...dot,
+    spaceId: other.id,
+    spaceIds: [other.id],
+  });
   expect((await app.request(path, request(draft))).status).toBe(403);
-  expect(ws.pages.list(dot.spaceId)).toHaveLength(1);
+  expect(await ws.pages.list(dot.spaceId)).toHaveLength(1);
 });
 
 it('restores review receipts through the owner API with current thread and Space authorization', async () => {
-  const { ws, app } = fixture('owner-secret');
-  const dot = ws.dots()[0];
-  ws.bindThread('review-restore', dot.id, 'Review');
+  const { ws, app } = await fixture('owner-secret');
+  const dot = (await ws.dots())[0]!;
+  await ws.bindThread('review-restore', dot.id, 'Review');
   const base = '/api/conversations/review-restore/reviewed-page';
   const headers = { Authorization: 'Bearer owner-secret' };
   expect((await app.request(`${base}/call`)).status).toBe(401);
   expect(
     await (await app.request(`${base}/call`, { headers })).json(),
   ).toBeNull();
-  const saved = ws.pages.createReviewed(
+  const saved = await ws.pages.createReviewed(
     dot.spaceId,
     { title: 'Saved', content: 'Evidence' },
     'review-restore',
@@ -201,7 +207,7 @@ it('restores review receipts through the owner API with current thread and Space
   expect(
     await (await app.request(`${base}/call`, { headers })).json(),
   ).toMatchObject({ id: saved.id, spaceId: dot.spaceId });
-  ws.bindThread('other-thread', dot.id, 'Other');
+  await ws.bindThread('other-thread', dot.id, 'Other');
   expect(
     await (
       await app.request('/api/conversations/other-thread/reviewed-page/call', {
@@ -217,7 +223,11 @@ it('restores review receipts through the owner API with current thread and Space
       )
     ).status,
   ).not.toBe(200);
-  const other = ws.createSpace('Other', '');
-  ws.updateDot(dot.id, { ...dot, spaceId: other.id, spaceIds: [other.id] });
+  const other = await ws.createSpace('Other', '');
+  await ws.updateDot(dot.id, {
+    ...dot,
+    spaceId: other.id,
+    spaceIds: [other.id],
+  });
   expect((await app.request(`${base}/call`, { headers })).status).toBe(403);
 });

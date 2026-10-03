@@ -49,7 +49,7 @@ type Turn = {
 export function slackHandlers(options: {
   config: SlackConfig;
   ownerId: string;
-  paused: () => boolean;
+  paused: () => boolean | Promise<boolean>;
   report?: Report;
 }) {
   const report = options.report ?? reportChannelFailure;
@@ -72,7 +72,7 @@ export function slackHandlers(options: {
     }
   }
   async function run(thread: Turn['thread']) {
-    if (options.paused()) {
+    if (await options.paused()) {
       await notice(
         thread,
         'OpenDots is paused. Resume it in the app before asking me to continue.',
@@ -109,7 +109,7 @@ export function slackHandlers(options: {
   return {
     async mention(turn: Turn) {
       if (!eligible(turn)) return;
-      if (options.paused()) {
+      if (await options.paused()) {
         await run(turn.thread);
         return;
       }
@@ -144,7 +144,7 @@ export function createSlackChannel(options: {
   agent: NonNullable<Parameters<typeof createChannel>[0]['agent']>;
   config: SlackConfig;
   ownerId: string;
-  paused: () => boolean;
+  paused: () => boolean | Promise<boolean>;
 }) {
   const channel = createChannel({
     name: options.name,

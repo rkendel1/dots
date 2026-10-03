@@ -30,6 +30,44 @@ it('waits for Channels and HTTP shutdown and handles repeated signals once', asy
   expect(closeServer).toHaveBeenCalledTimes(1);
   expect(exit).toHaveBeenCalledWith(0);
 });
+
+it('releases durable state after the server stops, and survives a failure there', async () => {
+  const order: string[] = [];
+  const exit = vi.fn(),
+    report = vi.fn();
+  const shutdown = createShutdown({
+    stopRunner: async () => {
+      order.push('runner');
+    },
+    stopPlatform: async () => {
+      order.push('platform');
+    },
+    closeServer: async () => {
+      order.push('server');
+    },
+    closeState: () => order.push('state'),
+    exit,
+    report,
+  });
+  await shutdown();
+  // The lock must not be released while requests could still be in flight.
+  expect(order).toEqual(['runner', 'platform', 'server', 'state']);
+  expect(exit).toHaveBeenCalledWith(0);
+
+  const failing = createShutdown({
+    stopRunner: () => {},
+    stopPlatform: async () => {},
+    closeServer: async () => {},
+    closeState: () => {
+      throw new Error('cannot release');
+    },
+    exit,
+    report,
+  });
+  await failing();
+  expect(report).toHaveBeenCalledTimes(1);
+  expect(exit).toHaveBeenLastCalledWith(1);
+});
 it('bounds a stuck shutdown and reports operation failures without stopping other cleanup', async () => {
   vi.useFakeTimers();
   const exit = vi.fn(),

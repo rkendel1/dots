@@ -21,12 +21,12 @@ export class Runner {
       void this.tick();
     }
   }
-  stop() {
+  async stop() {
     clearInterval(this.timer);
     this.timer = undefined;
-    for (const task of this.store.tasks()) {
+    for (const task of await this.store.tasks()) {
       if (this.active.has(task.id) && task.lease)
-        this.store.release(
+        await this.store.release(
           { ...task, lease: task.lease },
           'Server stopping; queued for restart.',
         );
@@ -42,13 +42,20 @@ export class Runner {
   }
   async tick() {
     if (this.active.size) return;
-    const claim = this.store.claim();
+    const claim = await this.store.claim();
     if (!claim) return;
     const controller = new AbortController();
     this.active.set(claim.id, controller);
     const ownershipCheck = setInterval(() => {
-      if (!this.store.owns(claim))
-        controller.abort(new Error('Run permission or lease was revoked.'));
+      void this.store
+        .owns(claim)
+        .then((owned) => {
+          if (!owned)
+            controller.abort(new Error('Run permission or lease was revoked.'));
+        })
+        .catch(() =>
+          controller.abort(new Error('Run permission or lease was revoked.')),
+        );
     }, 100);
     const timeout = setTimeout(
       () =>
@@ -58,27 +65,31 @@ export class Runner {
       90_000,
     );
     try {
-      const settings = this.store.settings();
-      const memories = settings.memoryAllowed ? this.store.memories() : [];
-      const progress = (text: string) => {
-        if (!this.store.owns(claim))
+      const settings = await this.store.settings();
+      const memories = settings.memoryAllowed
+        ? await this.store.memories()
+        : [];
+      // Awaited so progress events keep their order now that the store is
+      // asynchronous; `research` awaits this callback before continuing.
+      const progress = async (text: string) => {
+        if (!(await this.store.owns(claim)))
           controller.abort(new Error('Run permission or lease was revoked.'));
         controller.signal.throwIfAborted();
-        this.store.event(claim.id, claim.lease, text);
+        await this.store.event(claim.id, claim.lease, text);
       };
-      const result = this.execute
-        ? await this.execute(claim, memories, controller.signal, progress)
-        : await research(
+      const result = await (this.execute
+        ? this.execute(claim, memories, controller.signal, progress)
+        : research(
             claim.prompt,
             memories,
             this.config,
             controller.signal,
             progress,
-          );
+          ));
       controller.signal.throwIfAborted();
-      this.store.finish(claim, result);
+      await this.store.finish(claim, result);
     } catch (error) {
-      this.store.fail(
+      await this.store.fail(
         claim,
         error instanceof Error ? error.message : 'Unexpected research failure.',
       );

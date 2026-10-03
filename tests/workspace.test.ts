@@ -1,54 +1,90 @@
-import { DatabaseSync } from 'node:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
-import { WorkspaceStore } from '../src/server/workspace.js';
-it('persists spaces, specialist permissions, and canonical thread ownership', () => {
-  const store = new WorkspaceStore(':memory:', 'owner');
-  const space = store.createSpace('Design', 'Design decisions');
-  const dot = store.createDot(space.id, 'Scout', 'Be concise', false, true);
-  store.bindThread('thread-1', dot.id, 'Design research');
-  expect(store.requireThread('thread-1', dot.id).ownerId).toBe('owner');
-  expect(() => store.requireThread('thread-1', 'another-dot')).toThrow();
-  expect(() => store.requireThread('unknown')).toThrow();
-  expect(store.dot(dot.id)?.researchAllowed).toBe(false);
-  store.close();
-});
-it('rejects a dot in a nonexistent space and does not rebind an existing thread', () => {
-  const store = new WorkspaceStore(':memory:', 'owner');
-  expect(() => store.createDot('missing', 'Dot', 'Help', true, true)).toThrow();
-  const dots = store.dots();
-  store.bindThread('one', dots[0].id, 'First');
-  expect(() => store.bindThread('one', dots[0].id, 'Second')).toThrow();
-  store.close();
+import { memoryWorkspace, fileWorkspace } from './helpers/workspace.js';
+
+it('persists spaces, specialist permissions, and canonical thread ownership', async () => {
+  const store = await memoryWorkspace();
+  const space = await store.store.createSpace('Design', 'Design decisions');
+  const dot = await store.store.createDot(
+    space.id,
+    'Scout',
+    'Be concise',
+    false,
+    true,
+  );
+  await store.store.bindThread('thread-1', dot.id, 'Design research');
+  expect((await store.store.requireThread('thread-1', dot.id)).ownerId).toBe(
+    'owner',
+  );
+  await expect(
+    store.store.requireThread('thread-1', 'another-dot'),
+  ).rejects.toThrow();
+  await expect(store.store.requireThread('unknown')).rejects.toThrow();
+  expect((await store.store.dot(dot.id))?.researchAllowed).toBe(false);
+  store.state.close();
 });
 
-it('migrates legacy Space ownership once and never restores revoked access on restart', () => {
+it('rejects a dot in a nonexistent space and does not rebind an existing thread', async () => {
+  const store = await memoryWorkspace();
+  await expect(
+    store.store.createDot('missing', 'Dot', 'Help', true, true),
+  ).rejects.toThrow();
+  const dots = await store.store.dots();
+  await store.store.bindThread('one', dots[0]!.id, 'First');
+  // SQLite's primary key refused a duplicate id; create-only is preserved.
+  await expect(
+    store.store.bindThread('one', dots[0]!.id, 'Second'),
+  ).rejects.toThrow('Conversation already exists.');
+  expect((await store.store.requireThread('one')).title).toBe('First');
+  store.state.close();
+});
+
+it('keeps a revoked Space grant revoked across a restart', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'opendots-access-'));
-  const path = join(dir, 'workspace.sqlite');
+  const path = join(dir, 'state');
   try {
-    const legacy = new DatabaseSync(path);
-    legacy.exec(`CREATE TABLE spaces(id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, createdAt INTEGER NOT NULL);
-      CREATE TABLE dots(id TEXT PRIMARY KEY, spaceId TEXT NOT NULL, name TEXT NOT NULL, instructions TEXT NOT NULL, researchAllowed INTEGER NOT NULL, memoryAllowed INTEGER NOT NULL, createdAt INTEGER NOT NULL);
-      INSERT INTO spaces VALUES ('old', 'Original', '', 1), ('new', 'New', '', 2);
-      INSERT INTO dots VALUES ('dot', 'old', 'Dot', 'Help', 1, 1, 1);`);
-    legacy.close();
-    const ws = new WorkspaceStore(path, 'owner');
-    const dot = ws.dot('dot')!;
-    expect(dot.spaceIds).toEqual(['old']);
-    expect(ws.canAccessSpace('dot', 'new')).toBe(false);
-    expect(() =>
-      ws.updateDot('dot', { ...dot, spaceIds: ['missing'] }),
-    ).toThrow();
-    expect(ws.dot('dot')?.spaceIds).toEqual(['old']);
-    ws.bindThread('existing-thread', 'dot', 'Keep me');
-    ws.updateDot('dot', { ...dot, spaceId: 'new', spaceIds: ['new'] });
-    ws.close();
-    const reopened = new WorkspaceStore(path, 'owner');
-    expect(reopened.dot('dot')?.spaceIds).toEqual(['new']);
-    expect(reopened.canAccessSpace('dot', 'old')).toBe(false);
-    expect(reopened.requireThread('existing-thread').dotId).toBe('dot');
+    const first = fileWorkspace(path);
+    await first.store.bootstrap();
+    const original = (await first.store.spaces())[0]!;
+    const next = await first.store.createSpace('New', '');
+    const dot = await first.store.createDot(
+      original.id,
+      'Dot',
+      'Help',
+      true,
+      true,
+    );
+    expect(await first.store.canAccessSpace(dot.id, next.id)).toBe(false);
+    await expect(
+      first.store.updateDot(dot.id, { ...dot, spaceIds: ['missing'] }),
+    ).rejects.toThrow('Space access must include a valid default destination.');
+    // The rejected update must not have moved the Dot or its grants.
+    expect((await first.store.dot(dot.id))?.spaceIds).toEqual([original.id]);
+    await first.store.bindThread('existing-thread', dot.id, 'Keep me');
+    await first.store.updateDot(dot.id, {
+      ...dot,
+      spaceId: next.id,
+      spaceIds: [next.id],
+    });
+    first.close();
+
+    const reopened = fileWorkspace(path);
+    expect((await reopened.store.dot(dot.id))?.spaceIds).toEqual([next.id]);
+    expect(await reopened.store.canAccessSpace(dot.id, original.id)).toBe(
+      false,
+    );
+    expect((await reopened.store.requireThread('existing-thread')).dotId).toBe(
+      dot.id,
+    );
+    // A second bootstrap must not restore the revoked grant or duplicate the
+    // first-run defaults.
+    await reopened.store.bootstrap();
+    expect(await reopened.store.canAccessSpace(dot.id, original.id)).toBe(
+      false,
+    );
+    expect(await reopened.store.spaces()).toHaveLength(2);
     reopened.close();
   } finally {
     rmSync(dir, { recursive: true, force: true });

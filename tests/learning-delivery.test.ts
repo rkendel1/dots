@@ -10,8 +10,8 @@ import { lastValueFrom, toArray } from 'rxjs';
 import { chat } from '@tanstack/ai';
 import { DotAgent } from '../src/server/dot-agent.js';
 import { completion } from './fixtures/model-stream.js';
-import { Store } from '../src/server/store.js';
-import { WorkspaceStore } from '../src/server/workspace.js';
+import { memoryStore } from './helpers/store.js';
+import { memoryWorkspace } from './helpers/workspace.js';
 
 vi.mock('@tanstack/ai', { spy: true });
 afterEach(() => {
@@ -20,16 +20,17 @@ afterEach(() => {
 });
 
 it('TanStack AI streams with the verified skill catalog and authorized server tools', async () => {
-  const store = new Store(':memory:');
-  const workspace = new WorkspaceStore(':memory:', 'owner');
+  const handle = memoryStore();
+  const store = handle.store;
+  const workspace = await memoryWorkspace();
   try {
-    const dot = workspace.dots()[0];
-    workspace.updateDot(dot.id, {
+    const dot = (await workspace.store.dots())[0]!;
+    await workspace.store.updateDot(dot.id, {
       ...dot,
       learningContainerId: 'research',
       skillDeliveryEnabled: true,
     });
-    workspace.bindThread('thread', dot.id, 'Learning');
+    await workspace.store.bindThread('thread', dot.id, 'Learning');
     const bytes = readFileSync(
       new URL('./fixtures/learning-skills.zip', import.meta.url),
     );
@@ -74,7 +75,7 @@ it('TanStack AI streams with the verified skill catalog and authorized server to
       );
     const agent = new DotAgent(
       store,
-      workspace,
+      workspace.store,
       {
         intelligenceKey: 'fixture',
         apiKey: 'fixture',
@@ -122,22 +123,23 @@ it('TanStack AI streams with the verified skill catalog and authorized server to
       'Use only the tools provided in this conversation',
     );
   } finally {
-    workspace.close();
-    store.close();
+    workspace.state.close();
+    handle.close();
   }
 });
 
 it('native skill delivery fails the invocation before contacting the model when delivery is denied', async () => {
-  const store = new Store(':memory:');
-  const workspace = new WorkspaceStore(':memory:', 'owner');
+  const handle = memoryStore();
+  const store = handle.store;
+  const workspace = await memoryWorkspace();
   try {
-    const dot = workspace.dots()[0];
-    workspace.updateDot(dot.id, {
+    const dot = (await workspace.store.dots())[0]!;
+    await workspace.store.updateDot(dot.id, {
       ...dot,
       learningContainerId: 'research',
       skillDeliveryEnabled: true,
     });
-    workspace.bindThread('thread', dot.id, 'Learning');
+    await workspace.store.bindThread('thread', dot.id, 'Learning');
     const delivery = vi
       .spyOn(CopilotKitIntelligence.prototype, 'getLearnedSkillsSnapshots')
       .mockRejectedValue(new LearnedSkillsError('DELIVERY_DISABLED', false));
@@ -146,7 +148,7 @@ it('native skill delivery fails the invocation before contacting the model when 
       .mockRejectedValue(new Error('Unexpected network request'));
     const agent = new DotAgent(
       store,
-      workspace,
+      workspace.store,
       {
         intelligenceKey: 'fixture',
         apiKey: 'fixture',
@@ -175,7 +177,7 @@ it('native skill delivery fails the invocation before contacting the model when 
     );
     expect(network).not.toHaveBeenCalled();
   } finally {
-    workspace.close();
-    store.close();
+    workspace.state.close();
+    handle.close();
   }
 });
