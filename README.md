@@ -43,7 +43,7 @@ record, and it is what makes state survive a restart.
 ### The `.flow` contract
 
 [`feltdb.flow`](./feltdb.flow) is the authoritative application contract. It
-declares the OpenDots identity and all 18 durable collections with their fields
+declares the OpenDots identity and all 19 durable collections with their fields
 and relationships, and OpenDots refuses to start if its runtime uses a collection
 the contract does not declare.
 
@@ -51,7 +51,7 @@ Validate it with the pinned FeltDB CLI:
 
 ```sh
 node node_modules/@feltdb/core/bin/feltdb.js validate feltdb.flow
-# ✓ OpenDots: 18 collections
+# ✓ OpenDots: 19 collections
 ```
 
 See [docs/CONTRACT-FELTDB-FLOW.md](docs/CONTRACT-FELTDB-FLOW.md).
@@ -95,7 +95,7 @@ it can be read without inspecting source:
 "opendots": {
   "product": "OpenDots on FeltDB",
   "durableStateAuthority": "@feltdb/core",
-  "feltdb": { "version": "0.11.9", "contractFormatVersion": 1, "collections": 18 }
+  "feltdb": { "version": "0.11.9", "contractFormatVersion": 1, "collections": 19 }
 }
 ```
 

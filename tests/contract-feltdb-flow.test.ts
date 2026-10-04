@@ -64,7 +64,7 @@ describe('feltdb.flow contract validation', () => {
       { encoding: 'utf8' },
     );
     expect(stdout).toContain('OpenDots');
-    expect(stdout).toContain('18 collections');
+    expect(stdout).toContain('19 collections');
   });
 
   /**
@@ -105,13 +105,27 @@ describe('contract / runtime / migration collection agreement', () => {
     expect(declared.toSorted()).toEqual(runtime.toSorted());
   });
 
-  it('declares exactly the collections the migration planner imports', () => {
-    expect(declared.toSorted()).toEqual(migrated.toSorted());
+  it('declares every collection the migration planner imports', () => {
+    // The contract must cover anything the migration writes. This is deliberately
+    // a subset check rather than an equality: `executions` was introduced in 0.2.0,
+    // after SQLite was retired as a runtime store, so there is no legacy source
+    // for the migration to import into it and it is correctly absent from the
+    // planner. Equality would force either a fictional migration or a contract
+    // that omits a collection the runtime really uses.
+    for (const collection of migrated) expect(declared).toContain(collection);
   });
 
-  it('covers all 18 runtime collections', () => {
-    expect(runtime).toHaveLength(18);
-    expect(declared).toHaveLength(18);
+  it('declares nothing the runtime neither opens nor the migration imports', () => {
+    // The other direction: a collection in the contract that no path reaches is
+    // dead weight, and drift between `RUNTIME_COLLECTIONS` and the contract is
+    // exactly what this suite exists to catch.
+    const known = new Set<string>([...runtime, ...migrated]);
+    for (const collection of declared) expect(known.has(collection)).toBe(true);
+  });
+
+  it('covers all 19 runtime collections', () => {
+    expect(runtime).toHaveLength(19);
+    expect(declared).toHaveLength(19);
   });
 
   it('declares no collection twice', () => {

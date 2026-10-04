@@ -6,6 +6,9 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { Store } from './store.js';
 import { openFeltState } from './felt/state.js';
 import { findClientRoot } from './runtime-scope.js';
+import { ExecutionStore } from './executions.js';
+import { ExecutionService } from './execution-service.js';
+import { computeProviderFromEnv } from './compute-execution-provider.js';
 import { Runner } from './runner.js';
 import { createApp } from './app.js';
 import { WorkspaceStore } from './workspace.js';
@@ -26,6 +29,16 @@ if (
 // serving against state it does not own.
 const state = openFeltState();
 const store = new Store(state.db);
+// The execution control layer. Compute is an independent release, so a missing or
+// unreachable provider is not a startup failure: the service exists either way and
+// the API reports that no provider is configured.
+const executions = new ExecutionService(
+  new ExecutionStore(state.db),
+  computeProviderFromEnv(),
+);
+// Reconcile anything a previous process left in flight *before* the listener
+// binds, so a restarted OpenDots never serves a stale view of a live execution.
+await executions.recover();
 const workspace = new WorkspaceStore(
   process.env.OWNER_ID ?? 'opendots-owner',
   state.db,
@@ -96,6 +109,7 @@ const app = createApp({
       ? 'http://127.0.0.1:5173'
       : undefined),
   platform,
+  executions,
 });
 app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');

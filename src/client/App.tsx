@@ -27,6 +27,7 @@ import type {
   Conversation,
   Detail,
   Dot,
+  Execution,
   Result,
   State,
   WorkspaceState,
@@ -38,6 +39,7 @@ import { ThreadList } from './ThreadList';
 import { ResultPane } from './ResultPane';
 import { TaskRow } from './TaskPresentation';
 import { TaskActions } from './TaskActions';
+import { ExecutionPanel } from './ExecutionPanel';
 import { WorkspaceDialog, type Dialog } from './WorkspaceDialog';
 
 export function App() {
@@ -105,6 +107,10 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState('');
   const [taskDetail, setTaskDetail] = useState<Detail>();
+  const [executions, setExecutions] = useState<{
+    executions: Execution[];
+    provider: string | null;
+  }>();
   const refresh = useCallback(async () => {
     try {
       const [s, w] = await Promise.all([
@@ -147,6 +153,23 @@ export function App() {
       clearInterval(timer);
     };
   }, [selectedThread]);
+  const loadExecutions = useCallback(async (taskId: string) => {
+    try {
+      setExecutions(
+        await api<{ executions: Execution[]; provider: string | null }>(
+          `/executions?taskId=${encodeURIComponent(taskId)}`,
+        ),
+      );
+    } catch {
+      // The execution plane is optional. A failure to read it must not take the
+      // rest of the UI down with it.
+      setExecutions({ executions: [], provider: null });
+    }
+  }, []);
+  useEffect(() => {
+    if (!taskDetail) return;
+    void loadExecutions(taskDetail.task.id);
+  }, [taskDetail, loadExecutions]);
   const mutate = async (path: string, method: string, body?: unknown) => {
     setError('');
     try {
@@ -848,6 +871,51 @@ export function App() {
                     {taskDetail.task.error && (
                       <p className="chat-error">{taskDetail.task.error}</p>
                     )}
+                    <ExecutionPanel
+                      executions={executions?.executions ?? []}
+                      provider={executions?.provider ?? null}
+                      busy={busy}
+                      onRun={async () => {
+                        setBusy(true);
+                        setError('');
+                        try {
+                          // The idempotency key identifies *this* press of the
+                          // button. It is generated once per attempt, so a retry
+                          // after a timeout that reuses it resolves to the same
+                          // execution instead of starting a second one.
+                          await api('/executions', 'POST', {
+                            prompt: taskDetail.task.prompt,
+                            taskId: taskDetail.task.id,
+                            idempotencyKey: crypto.randomUUID(),
+                          });
+                        } catch (e) {
+                          setError(
+                            e instanceof Error
+                              ? e.message
+                              : 'Could not start the execution.',
+                          );
+                        } finally {
+                          setBusy(false);
+                          await loadExecutions(taskDetail.task.id);
+                        }
+                      }}
+                      onCancel={(id) => {
+                        setBusy(true);
+                        setError('');
+                        void api(`/executions/${id}/cancel`, 'POST', {})
+                          .catch((e: unknown) =>
+                            setError(
+                              e instanceof Error
+                                ? e.message
+                                : 'Could not cancel the execution.',
+                            ),
+                          )
+                          .finally(() => {
+                            setBusy(false);
+                            void loadExecutions(taskDetail.task.id);
+                          });
+                      }}
+                    />
                     {taskDetail.events.slice(-6).map((event) => (
                       <p className="muted" key={event.id}>
                         {event.text}

@@ -3993,3 +3993,90 @@ h3 {
   font-size: 14px;
   color: #c9e8dd;
 }
+
+/* Execution control plane. Presentation only: every value rendered here comes
+   from the OpenDots API, and the components never infer a status locally. */
+.execution-panel {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(180, 210, 200, 0.18);
+}
+.execution-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.execution-panel-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #b3d2c8;
+}
+.execution {
+  border: 1px solid rgba(180, 210, 200, 0.16);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: rgba(12, 26, 24, 0.35);
+}
+.execution-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.execution-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #c9e8dd;
+}
+.execution.completed .execution-status {
+  color: #7fd6a8;
+}
+.execution.failed .execution-status {
+  color: #e08a8a;
+}
+.execution.cancelled .execution-status {
+  color: #9aa9a4;
+}
+.execution dl {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) 1fr;
+  gap: 4px 14px;
+  margin: 0;
+  font-size: 12px;
+}
+.execution dt {
+  color: #7f9a92;
+}
+.execution dd {
+  margin: 0;
+  color: #dcefe8;
+  overflow-wrap: anywhere;
+}
+.execution code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+.execution-result {
+  margin: 10px 0 0;
+  padding: 10px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.execution .quiet-button {
+  margin-top: 10px;
+}

@@ -99,6 +99,26 @@ app OpenDots {
     error: text?
   }
 
+  collection executions {
+    id: text
+    taskId: text?
+    dotId: text?
+    status: enum(queued, starting, running, completed, failed, cancelled)
+    provider: text
+    providerExecutionId: text?
+    providerSessionId: text?
+    providerStatus: text?
+    idempotencyKey: text
+    index idempotencyKey using unique idempotencyKey
+    prompt: text
+    createdAt: datetime
+    startedAt: datetime?
+    completedAt: datetime?
+    result: json?
+    errorCode: text?
+    error: text?
+  }
+
   collection task_events {
     taskId: ref tasks
     runId: text?

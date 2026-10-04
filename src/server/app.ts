@@ -9,6 +9,8 @@ import { configured, type Config } from './research.js';
 import type { Platform } from './platform.js';
 import { VoiceService } from './voice.js';
 import { workspaceRoutes } from './workspace-routes.js';
+import type { ExecutionService } from './execution-service.js';
+import { executionRoutes } from './execution-routes.js';
 const interval = z.number().int().min(60).max(31_536_000).nullable();
 export interface AppOptions {
   store: Store;
@@ -17,6 +19,13 @@ export interface AppOptions {
   ownerToken?: string;
   origin?: string;
   platform?: Platform;
+  /**
+   * The execution control layer.
+   *
+   * Optional because OpenDots must be fully usable with no execution provider at
+   * all — Compute is released separately, and its absence is not an error.
+   */
+  executions?: ExecutionService;
 }
 export function createApp({
   store,
@@ -25,6 +34,7 @@ export function createApp({
   ownerToken,
   origin,
   platform,
+  executions,
 }: AppOptions) {
   const app = new Hono();
   app.use(
@@ -74,6 +84,7 @@ export function createApp({
     await next();
   });
   if (platform) app.route('/api', computerRoutes(platform.computers));
+  if (executions) app.route('/api', executionRoutes(executions));
   const voice = platform ? new VoiceService(platform) : undefined;
   if (platform && voice) app.route('/api', workspaceRoutes(platform, voice));
   app.get('/api/state', async (c) =>

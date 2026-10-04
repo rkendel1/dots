@@ -134,7 +134,18 @@ const EXPECTED = [
   'captures',
   'computer_permissions',
   'computer_audit',
+  'executions',
 ];
+
+/**
+ * Collections the runtime opens that have no legacy SQLite source.
+ *
+ * `executions` arrived in 0.2.0, long after SQLite was retired as a runtime
+ * store, so the Phase 6 migration has nothing to import into it. It is listed here
+ * explicitly rather than folded into the planner, so adding another post-SQLite
+ * collection is a deliberate edit to this file rather than an accident.
+ */
+const NOT_MIGRATED = new Set(['executions']);
 
 describe('every runtime collection is FeltDB-backed', () => {
   const opened = new Set<string>();
@@ -150,19 +161,33 @@ describe('every runtime collection is FeltDB-backed', () => {
       opened.add(match[1]!);
   }
 
-  it('opens exactly the eighteen expected collections', () => {
+  it('opens exactly the nineteen expected collections', () => {
     expect([...opened].sort()).toEqual([...EXPECTED].sort());
-    expect(EXPECTED).toHaveLength(18);
+    expect(EXPECTED).toHaveLength(19);
   });
 
-  it('matches the collections the Phase 6 migration imports', async () => {
-    // The two lists must agree, or a migrated collection would be dead weight
-    // and a runtime collection would be unreachable from a migration. Imported
-    // from the *planner*, which is pure — importing the CLI entry point would
-    // execute the migration as a side effect.
+  it('imports every migrated collection, and the runtime opens each one', async () => {
+    // Every collection the Phase 6 migration imports must have a runtime read and
+    // write path, or it would be dead weight the migration creates. Imported from
+    // the *planner*, which is pure — importing the CLI entry point would execute
+    // the migration as a side effect.
     const { MIGRATED_COLLECTIONS } =
       await import('../migrations/import-plan.js');
-    expect([...MIGRATED_COLLECTIONS].sort()).toEqual([...opened].sort());
+    for (const collection of MIGRATED_COLLECTIONS)
+      expect(opened.has(collection)).toBe(true);
+  });
+
+  it('leaves out exactly the collections that never existed in SQLite', async () => {
+    // The two lists are no longer equal by design: a collection introduced after
+    // SQLite was retired has no legacy source to migrate from. Anything else that
+    // falls outside the planner is a real gap — a runtime collection the migration
+    // silently forgets.
+    const { MIGRATED_COLLECTIONS } =
+      await import('../migrations/import-plan.js');
+    const unmigrated = [...opened].filter(
+      (collection) => !MIGRATED_COLLECTIONS.includes(collection as never),
+    );
+    expect(new Set(unmigrated)).toEqual(NOT_MIGRATED);
   });
 });
 

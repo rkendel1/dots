@@ -18,6 +18,56 @@ export interface Task {
   lease: string | null;
   leaseUntil: number | null;
 }
+/**
+ * The lifecycle OpenDots owns for an external execution.
+ *
+ * Deliberately coarser than any provider's own vocabulary. Compute's `JobStatus`
+ * has thirteen values; the domain needs to know only whether work is waiting,
+ * getting going, under way, or finished, and which of the three terminal outcomes
+ * it reached. The provider's exact word is kept separately on `ExecutionRecord` as
+ * `providerStatus`, so this normalization is auditable rather than lossy.
+ */
+export type ExecutionStatus =
+  'queued' | 'starting' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+/**
+ * One external execution OpenDots has asked a provider to perform.
+ *
+ * This is deliberately distinct from `Run`. A `Run` is a research attempt made
+ * *inside* this process: a task claim creates it, its id is the lease, and only
+ * the worker holding that lease may finish it. An execution is owned by an
+ * external provider, outlives the request that asked for it, carries the
+ * provider's identity so it can be reconciled after a restart, and is
+ * idempotent on submission.
+ */
+export interface Execution {
+  id: string;
+  /** The task this execution was requested for, when it came from one. */
+  taskId: string | null;
+  /** The Dot this execution was requested for, when it came from one. */
+  dotId: string | null;
+  status: ExecutionStatus;
+  /** The provider that owns this execution, e.g. `compute`. */
+  provider: string;
+  /** The provider's own identifier — Compute's `job_id`. */
+  providerExecutionId: string | null;
+  /** The provider's session identity, when it ran inside one. */
+  providerSessionId: string | null;
+  /** The provider's raw status word, kept verbatim alongside the normalized one. */
+  providerStatus: string | null;
+  /** Stable across retries of the same request; unique per execution. */
+  idempotencyKey: string;
+  /** What OpenDots was asked to run. Never a provider-specific instruction. */
+  prompt: string;
+  createdAt: number;
+  startedAt: number | null;
+  completedAt: number | null;
+  /** Whatever the provider returned, in its own shape. Never synthesized. */
+  result: unknown | null;
+  errorCode: string | null;
+  error: string | null;
+}
+
 export interface Source {
   title: string;
   url: string;

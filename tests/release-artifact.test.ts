@@ -176,7 +176,7 @@ describe('release artifact — the installed package works standalone', () => {
     expect(pkg.opendots.durableStateAuthority).toBe('@feltdb/core');
     expect(pkg.opendots.contract).toBe('feltdb.flow');
     expect(pkg.opendots.runtimeSqlite).toBe(false);
-    expect(pkg.opendots.feltdb.collections).toBe(18);
+    expect(pkg.opendots.feltdb.collections).toBe(19);
     // The same declaration must ship with the artifact, so an installed user can
     // answer the compatibility question without reading source.
     const shipped = JSON.parse(
@@ -211,7 +211,7 @@ describe('release artifact — the installed package works standalone', () => {
       true,
     );
     expect(resolved.app).toBe('OpenDots');
-    expect(resolved.n).toBe(18);
+    expect(resolved.n).toBe(19);
     // And it is this package's copy, not a stray checkout the install could reach.
     expect(realpathSync(dirname(resolved.path))).toBe(
       realpathSync(join(root(), 'dist')),
@@ -225,7 +225,7 @@ describe('release artifact — the installed package works standalone', () => {
       installed,
     );
     expect(out).toContain('OpenDots');
-    expect(out).toContain('18 collections');
+    expect(out).toContain('19 collections');
   });
 
   it('rejects a malformed contract through the same pinned CLI', () => {
@@ -252,7 +252,7 @@ describe('release artifact — the installed package works standalone', () => {
       'OpenDots on FeltDB',
     );
     const status = run([process.execPath, cli, 'status'], installed);
-    expect(status).toContain('18 collections declared');
+    expect(status).toContain('19 collections declared');
     expect(status).toMatch(/namespace\s+opendots/);
     expect(run([process.execPath, cli, 'stop'], installed)).toContain(
       'foreground',

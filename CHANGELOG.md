@@ -63,8 +63,42 @@ the product.
   remains explicit and admin-only; it is not imported by startup and does not run
   as a side effect of tests.
 
+### Added
+
+- **OpenDots can now control real Compute executions.** A durable `executions`
+  collection joins `feltdb.flow` (19 collections), an `ExecutionProvider`
+  boundary isolates external work, and `ComputeExecutionProvider` speaks Compute's
+  real `compute.remote@1` protocol — `POST /compute/jobs` for submission,
+  `GET /compute/jobs/{id}` for status, `/result` for output, `/cancel` to stop.
+  Nothing about that protocol is invented; see
+  [`docs/EXECUTION-ARCHITECTURE.md`](docs/EXECUTION-ARCHITECTURE.md) for the
+  routes, headers and status vocabulary OpenDots depends on.
+- **Executions survive a restart.** State lives in FeltDB and is reconciled
+  against the provider on startup. OpenDots never assumes an execution finished
+  because the process restarted; it asks.
+- **Starting an execution is safe to retry.** The durable record key is derived
+  from the request's idempotency key, so a repeat — or two concurrent requests —
+  converges on one execution instead of two. The same key is submitted to
+  Compute, which resolves the retry to the job it already has.
+- **Execution status has an enforced lifecycle.** `queued → starting → running →
+completed`, with `failed` and `cancelled` reachable only from the states that
+  allow them. Terminal states are final, and there is deliberately no API route
+  that lets a client set one.
+- **A Run action and execution visibility in the task detail view**, rendered
+  entirely from `/api/executions`.
+- `COMPUTE_ENDPOINT` and `COMPUTE_AUTHORIZATION` configure the provider. With no
+  endpoint there is no provider, and OpenDots is fully usable without one —
+  Compute is released independently, and this release does not wait for it.
+
 ### Known scope boundaries
 
+- **Compute has no prompt input.** `compute.remote@1` accepts a workload
+  artifact and nothing else, so OpenDots encodes a prompt as a small `shell`
+  workload. What comes back is that workload's output, not a language-model
+  answer. A prompt-shaped execution would require a Compute API that does not
+  exist today, so it is not implemented.
+- Receipts are stored verbatim inside the execution result but are not yet
+  projected by a dedicated endpoint.
 - Domain key schemes remain implementation-level TypeScript, because the installed
   FlowSpec format does not currently express record-key expressions.
 - The Hono API is implemented by domain stores rather than generated from
@@ -74,9 +108,11 @@ the product.
 ### Not included
 
 - **Chip integration is not part of this release.** It belongs to the
-  Compute-configured execution path and is still being completed. This release
-  introduces no Chip or Compute dependency and can be followed by that
-  integration without invalidating it.
+  Compute-configured execution path and is still being completed. OpenDots
+  depends on Compute and never on Chip; the eventual execution environment may
+  contain Chip, and OpenDots neither knows nor needs to. This release introduces no
+  Chip or Compute dependency and can be followed by that integration without
+  invalidating it.
 
 ## [0.1.0]
 

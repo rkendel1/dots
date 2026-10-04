@@ -111,7 +111,7 @@
     "feltdb": {
       "version": "0.11.9",
       "contractFormatVersion": 1,
-      "collections": 18
+      "collections": 19
     }
   },
   "overrides": {
