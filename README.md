@@ -2,21 +2,102 @@
 
 # OpenDots
 
-### Always-on AI coworkers that move between text, calls, and Slack.
+### OpenDots on FeltDB — a development control plane with durable application state.
 
-**An open-source template for persistent AI agents, each with its own computer. Available on Web and Mobile.**
+**An open-source control plane for AI coworkers, with durable state powered by FeltDB. Available on Web and Mobile.**
 
-Built with [CopilotKit](https://github.com/CopilotKit/CopilotKit) and [AG-UI](https://docs.ag-ui.com/introduction). · [Get started](#get-started) · [Overview](#overview) · [Architecture](#architecture) · [Status](#development-status) · [Contributing](CONTRIBUTING.md)
+Built with [CopilotKit](https://github.com/CopilotKit/CopilotKit), [AG-UI](https://docs.ag-ui.com/introduction) and [FeltDB](https://www.npmjs.com/package/@feltdb/core). · [Get started](#get-started) · [Overview](#overview) · [Architecture](#architecture) · [Status](#development-status) · [Contributing](CONTRIBUTING.md)
 
 [![CI](https://github.com/CopilotKit/OpenDots/actions/workflows/ci.yml/badge.svg)](https://github.com/CopilotKit/OpenDots/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 ![Alpha](https://img.shields.io/badge/status-alpha-orange.svg)
 
-Fully self-hostable. Clone this template and customize it however you want.
+Fully self-hostable.
 
 [**Building on OpenDots? Meet with the CopilotKit team →**](https://www.copilotkit.ai/talk-to-an-engineer?ref=opendots_readme)
 
 </div>
+
+---
+
+## What OpenDots is
+
+OpenDots is a **development control plane** with durable application state. It is
+where you define Dots (your AI coworkers), the Spaces they work in, the Tasks
+they run, and the Pages they produce — and it remembers all of it across restarts.
+
+```
+OpenDots
+   │
+   ├── feltdb.flow          authoritative FeltDB application contract
+   ├── domain stores        application behaviour (tasks, dots, work)
+   └── FeltDB               sole runtime durable-state authority
+```
+
+### What FeltDB provides
+
+FeltDB is the durable state authority. It stores every Space, Dot, Task, Run,
+Memory, Page, review, conversation binding, capture and computer-permission
+record, and it is what makes state survive a restart.
+
+### The `.flow` contract
+
+[`feltdb.flow`](./feltdb.flow) is the authoritative application contract. It
+declares the OpenDots identity and all 18 durable collections with their fields
+and relationships, and OpenDots refuses to start if its runtime uses a collection
+the contract does not declare.
+
+Validate it with the pinned FeltDB CLI:
+
+```sh
+node node_modules/@feltdb/core/bin/feltdb.js validate feltdb.flow
+# ✓ OpenDots: 18 collections
+```
+
+See [docs/CONTRACT-FELTDB-FLOW.md](docs/CONTRACT-FELTDB-FLOW.md).
+
+### SQLite
+
+**SQLite is not used for runtime application state.** A legacy
+`data/opendots.sqlite` file may exist in a checkout or data volume; it is a
+**migration source only** and is never read at runtime. There is no SQLite
+fallback and no runtime SQLite dependency.
+
+### Positioning
+
+```
+OpenDots on FeltDB  =  control plane + durable application state
+Compute             =  execution plane
+Chip                =  agent runtime
+```
+
+OpenDots is the control plane. Compute remains the execution plane and Chip the
+agent runtime; that integration belongs to the Compute-configured execution path
+and is still being completed. **Chip is not a prerequisite for this release**,
+and this release does not depend on it.
+
+### Two deliberate boundaries
+
+- **Domain key schemes** (page, grant, event and review keys) remain
+  implementation-level TypeScript, because the installed FlowSpec format does not
+  currently express record-key expressions. The contract declares the fields
+  those keys are composed from.
+- **The Hono API is implemented by the domain stores**, not generated from
+  FlowSpec, because the format does not currently express service or API
+  declarations.
+
+### Compatibility
+
+The compatible FeltDB version is declared in `package.json` under `opendots`, so
+it can be read without inspecting source:
+
+```json
+"opendots": {
+  "product": "OpenDots on FeltDB",
+  "durableStateAuthority": "@feltdb/core",
+  "feltdb": { "version": "0.11.9", "contractFormatVersion": 1, "collections": 18 }
+}
+```
 
 ---
 

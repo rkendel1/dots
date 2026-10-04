@@ -1,9 +1,11 @@
 import { createShutdown } from './shutdown.js';
+import { join } from 'node:path';
 import { reportChannelFailure, safeFailure } from './slack-channel.js';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { Store } from './store.js';
 import { openFeltState } from './felt/state.js';
+import { findClientRoot } from './runtime-scope.js';
 import { Runner } from './runner.js';
 import { createApp } from './app.js';
 import { WorkspaceStore } from './workspace.js';
@@ -105,8 +107,11 @@ app.use('*', async (c, next) => {
   await next();
 });
 app.get('/api/*', (c) => c.json({ error: 'Not found.' }, 404));
-app.use('/*', serveStatic({ root: './dist/client' }));
-app.get('*', serveStatic({ path: './dist/client/index.html' }));
+// Module-relative, never working-directory relative: the installed package is
+// started from a user's own project, which has no `dist/` of its own.
+const clientRoot = findClientRoot();
+app.use('/*', serveStatic({ root: clientRoot }));
+app.get('*', serveStatic({ path: join(clientRoot, 'index.html') }));
 const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
   console.log(`OpenDots template listening on http://${host}:${info.port}`);
   runner.start();

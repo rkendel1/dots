@@ -121,3 +121,32 @@ jobs:
       # contract and FeltDB alone, and never creates data/opendots.sqlite.
       - name: 'Acceptance: runs from the contract with SQLite absent'
         run: npx vitest run tests/contract-acceptance.test.ts
+
+  # Tests the published artifact, not the repository.
+  #
+  # Every other job proves the source tree is correct. This one packs the
+  # tarball, installs it into a clean directory with no repository in reach, and
+  # drives the real product: validate the shipped contract with the pinned FeltDB
+  # CLI, start OpenDots, write through its HTTP API, restart, read it back.
+  #
+  # It is what catches a `feltdb.flow` that does not ship, a `files` entry that
+  # omits a runtime asset, a dependency the runtime needs but the package never
+  # declared, and a contract the installed copy cannot resolve.
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - name: Validate the built contract with the pinned FeltDB CLI
+        run: node node_modules/@feltdb/core/bin/feltdb.js validate dist/feltdb.flow
+
+      # Slow by nature: builds, packs, installs, and boots the server twice.
+      - name: 'Release artifact: pack, install clean, start, restart'
+        run: npx vitest run tests/release-artifact.test.ts --testTimeout=900000

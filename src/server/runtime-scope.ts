@@ -1,4 +1,43 @@
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { WorkspaceStore } from './workspace.js';
+
+/** Entry document every built UI has. */
+const CLIENT_ENTRY = 'index.html';
+
+/**
+ * Locate the built UI directory by walking up from this module.
+ *
+ * This mirrors {@link import('./contract.js').findContractFile} deliberately, and
+ * for the same reason. The server is compiled from `src/` into `dist/server/`, so
+ * `dist/client` sits a different number of directories above the entry module
+ * depending on whether it runs from source, from a build, or from the container
+ * image — which carries `dist/` and nothing else.
+ *
+ * The walk has to be module-relative. Resolving `./dist/client` against the
+ * process working directory works in a checkout, where a developer happens to
+ * launch from the root, and silently serves nothing anywhere else: start the
+ * installed package from a user's own project and there is no `dist/` next to it.
+ *
+ * @throws when the UI is absent. A server that cannot find its own client bundle
+ * is mispackaged, and returning an empty 404 would hide that behind a blank page.
+ */
+export function findClientRoot(): string {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 10; depth++) {
+    const candidate = join(dir, 'dist', 'client');
+    if (existsSync(join(candidate, CLIENT_ENTRY))) return candidate;
+    const parent = resolve(dir, '..');
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error(
+    `OpenDots cannot start: the built UI (dist/client/${CLIENT_ENTRY}) was not ` +
+      `found. It must ship with the application.`,
+  );
+}
+
 export async function validateRuntimeScope(
   request: Request,
   workspace: WorkspaceStore,
