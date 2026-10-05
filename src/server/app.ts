@@ -1,5 +1,6 @@
 import { attentionRoutes } from './attention-routes.js';
 import { computerRoutes } from './computer-routes.js';
+import { decisionRoutes } from './decision-routes.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { timingSafeEqual } from 'node:crypto';
@@ -11,6 +12,7 @@ import type { Platform } from './platform.js';
 import { VoiceService } from './voice.js';
 import { workspaceRoutes } from './workspace-routes.js';
 import type { AttentionStore } from './attention.js';
+import type { DecisionStore } from './decisions.js';
 import type { ExecutionService } from './execution-service.js';
 import type { ExecutionReconciler } from './execution-reconciler.js';
 import { executionRoutes } from './execution-routes.js';
@@ -44,6 +46,20 @@ export interface AppOptions {
    * absent the `/api/attention` routes are simply not mounted.
    */
   attention?: AttentionStore;
+  /**
+   * The decision store for human decisions about attention items.
+   *
+   * Optional, but mounted only when attention is also present. Decisions are
+   * durable records of human choices about conditions.
+   */
+  decisions?: DecisionStore;
+  /**
+   * The owner ID for recording which human made a decision.
+   *
+   * Used when creating decisions to identify the actor. Optional; decisions
+   * routes are only mounted when both this and the decision store are present.
+   */
+  ownerId?: string;
 }
 export function createApp({
   store,
@@ -55,6 +71,8 @@ export function createApp({
   executions,
   reconciler,
   attention,
+  decisions,
+  ownerId,
 }: AppOptions) {
   const app = new Hono();
   app.use(
@@ -113,6 +131,17 @@ export function createApp({
       attentionRoutes(attention, {
         executions: executions.executions,
         tasks: store,
+      }),
+    );
+  if (attention && decisions && ownerId && executions)
+    // Decision routes need attention store, decision store, and owner identity.
+    // They are mounted only when all three are present along with executions.
+    app.route(
+      '/api',
+      decisionRoutes({
+        decisions,
+        attention,
+        ownerId,
       }),
     );
   const voice = platform ? new VoiceService(platform) : undefined;

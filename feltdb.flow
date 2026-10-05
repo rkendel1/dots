@@ -158,6 +158,23 @@ app OpenDots {
     conditionClearedAt: datetime?
   }
 
+  // Durable human decisions about attention items.
+  //
+  // One row per unique decision: a human making the same decision about the same
+  // attention item is idempotent (same record), but a different decision on the
+  // same item is a new row. The id encodes the decision's identity (attention +
+  // decision + actor), and decisions are immutable once recorded. History survives
+  // indefinitely, and resolving or deleting an attention item does not erase its
+  // decisions.
+  collection decisions {
+    id: text
+    attentionId: ref attention
+    decision: enum(approve, reject, retry, dismiss)
+    actorType: enum(human)
+    actorId: text
+    createdAt: datetime
+  }
+
   collection memories {
     id: text
     text: text
