@@ -9,6 +9,7 @@
  * Multiple proposals for the same attention are allowed.
  */
 
+import { createHash } from 'node:crypto';
 import type { Collection, StateFirstDB } from '@feltdb/core';
 
 export interface DecisionProposalRecord {
@@ -39,7 +40,12 @@ export function proposalIdFor(
   agentId: string,
   decision: string,
 ): string {
-  return `dprop_${[attentionId, agentId, decision]
-    .map((part) => `${part.length}:${part}`)
-    .join('')}`;
+  const digest = createHash('sha256')
+    .update(
+      [attentionId, agentId, decision]
+        .map((part) => `${part.length}:${part}`)
+        .join(''),
+    )
+    .digest('hex');
+  return `dprop_${digest.slice(0, 16)}`;
 }
