@@ -177,6 +177,7 @@ const app = createApp({
   proposals,
   configService,
   platformConfig: config,
+  db: state.db,
 });
 app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');

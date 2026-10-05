@@ -21,6 +21,7 @@ import { executionRoutes } from './execution-routes.js';
 import { configurationRoutes } from './configuration-routes.js';
 import type { ConfigurationService } from './configuration.js';
 import type { PlatformConfig } from './platform-config.js';
+import type { StateFirstDB } from '@feltdb/core';
 const interval = z.number().int().min(60).max(31_536_000).nullable();
 export interface AppOptions {
   store: Store;
@@ -81,6 +82,11 @@ export interface AppOptions {
    * Proposals are durable records of agent suggestions but do not authorize anything.
    */
   proposals?: DecisionProposalStore;
+  /**
+   * The durable state database.
+   * Used for capability discovery and configuration persistence.
+   */
+  db?: StateFirstDB;
 }
 export function createApp({
   store,
@@ -98,6 +104,7 @@ export function createApp({
   proposals,
   configService,
   platformConfig,
+  db,
 }: AppOptions) {
   const app = new Hono();
   app.use(
@@ -179,7 +186,7 @@ export function createApp({
   const voice = platform ? new VoiceService(platform) : undefined;
   if (platform && voice) app.route('/api', workspaceRoutes(platform, voice));
   if (configService && platformConfig)
-    app.route('/api', configurationRoutes(configService, platformConfig));
+    app.route('/api', configurationRoutes(configService, platformConfig, db));
   app.get('/api/state', async (c) =>
     c.json({
       settings: await store.settings(),

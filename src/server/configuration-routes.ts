@@ -2,6 +2,9 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import type { ConfigurationService } from './configuration.js';
 import type { PlatformConfig } from './platform-config.js';
+import { buildCapabilityStatus } from './capability-status.js';
+import { ComputeReadinessStore } from './compute-readiness-store.js';
+import type { StateFirstDB } from '@feltdb/core';
 
 /**
  * Configuration API routes.
@@ -11,6 +14,7 @@ import type { PlatformConfig } from './platform-config.js';
 export function configurationRoutes(
   configService: ConfigurationService,
   config: PlatformConfig,
+  db?: StateFirstDB,
 ) {
   const app = new Hono();
 
@@ -30,6 +34,32 @@ export function configurationRoutes(
             error instanceof Error
               ? error.message
               : 'Failed to read configuration',
+        },
+        500,
+      );
+    }
+  });
+
+  /**
+   * GET /api/setup/capabilities
+   * Returns capability-oriented status for the Setup UI.
+   * Exposes what OpenDots can do, not implementation details.
+   */
+  app.get('/setup/capabilities', async (c) => {
+    try {
+      const configuration = await configService.getConfiguration(config);
+      const computeReadiness = db ? new ComputeReadinessStore(db) : null;
+      const computeState = computeReadiness ? await computeReadiness.current() : undefined;
+
+      const capabilities = buildCapabilityStatus(configuration, computeState);
+      return c.json(capabilities);
+    } catch (error) {
+      return c.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : 'Failed to read setup status',
         },
         500,
       );

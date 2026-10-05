@@ -419,6 +419,63 @@ export interface ConfigurationRequirement {
   source: 'environment' | 'managed' | 'missing';
 }
 
+/**
+ * Capability-oriented Setup model for UI.
+ * Shows what OpenDots can do, not implementation details.
+ */
+export type CapabilityStatusType =
+  | 'ready'
+  | 'configured'
+  | 'not_configured'
+  | 'error'
+  | 'not_connected'
+  | 'connected';
+
+export interface CapabilityBase {
+  status: CapabilityStatusType;
+  reason?: string;
+}
+
+export interface IntelligenceCapabilityStatus extends CapabilityBase {
+  required: true;
+  provider?: 'openai' | 'anthropic';
+  model?: string;
+  credentialConfigured: boolean;
+}
+
+export interface ComputeCapabilityStatus extends CapabilityBase {
+  required: false;
+  capabilities?: string[];
+  endpoint?: string;
+}
+
+export interface BrowserCapabilityStatus extends CapabilityBase {
+  required: false;
+  url?: string;
+}
+
+export interface VoiceCapabilityStatus extends CapabilityBase {
+  required: false;
+  provider?: string;
+  model?: string;
+  voice?: string;
+  credentialConfigured: boolean;
+}
+
+export interface SlackCapabilityStatus extends CapabilityBase {
+  required: false;
+  channel?: string;
+  team?: string;
+}
+
+export interface SetupCapabilitiesModel {
+  intelligence: IntelligenceCapabilityStatus;
+  computers: ComputeCapabilityStatus;
+  browser: BrowserCapabilityStatus;
+  voice: VoiceCapabilityStatus;
+  slack: SlackCapabilityStatus;
+}
+
 /** Non-secret configuration that can be persisted. */
 export interface ManagedConfiguration {
   id: string;
