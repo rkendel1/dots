@@ -168,6 +168,23 @@ export class DecisionApplicator {
   ): Promise<DecisionApplicationRecord | null> {
     return this.felt.decision_applications.get(applicationIdFor(decisionId));
   }
+
+  /**
+   * Get application records for multiple decisions.
+   *
+   * Returns a map of decisionId → application record (or undefined if no application).
+   * Used by history composition to build the causal chain.
+   */
+  async getApplications(
+    decisionIds: string[],
+  ): Promise<Map<string, DecisionApplicationRecord | undefined>> {
+    const result = new Map<string, DecisionApplicationRecord | undefined>();
+    for (const decisionId of decisionIds) {
+      const app = await this.getApplication(decisionId);
+      result.set(decisionId, app ?? undefined);
+    }
+    return result;
+  }
 }
 
 /**
