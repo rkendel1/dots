@@ -52,6 +52,7 @@ export const RUNTIME_COLLECTIONS = [
   'executions',
   'attention',
   'decisions',
+  'decision_applications',
   'task_events',
   'memories',
   'calls',

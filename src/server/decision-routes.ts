@@ -6,29 +6,35 @@
  * directly.
  *
  *   GET  /attention/:id/decisions          list all decisions for an item
- *   POST /attention/:id/decisions          create a decision
+ *   POST /attention/:id/decisions          create a decision and apply if possible
  *
  * Decisions are immutable and append-only. A successful POST creates or returns
  * the existing decision record if identical (idempotent by decision identity).
  * Decisions are never edited or deleted — if a human changes their mind, that is
  * a new decision record.
+ *
+ * Application is synchronous: decisions with corresponding operations (currently
+ * only `dismiss` → `resolve`) are applied as part of the POST. The response
+ * distinguishes between decision recorded and action applied.
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { DecisionValue } from '../shared/types.js';
 import type { AttentionStore } from './attention.js';
 import type { DecisionStore } from './decisions.js';
+import type { DecisionApplicator } from './decision-applicator.js';
 import { isLegalDecision, legalDecisionsFor } from './decision-vocabulary.js';
 
 export interface DecisionRouteOptions {
   decisions: DecisionStore;
   attention: AttentionStore;
+  applicator: DecisionApplicator;
   ownerId: string;
 }
 
 export function decisionRoutes(options: DecisionRouteOptions): Hono {
   const app = new Hono();
-  const { decisions, attention, ownerId } = options;
+  const { decisions, attention, applicator, ownerId } = options;
 
   /**
    * List all decisions for an attention item.
@@ -102,7 +108,17 @@ export function decisionRoutes(options: DecisionRouteOptions): Hono {
       actorId: ownerId,
     });
 
-    return c.json({ decision: created }, 201);
+    // Apply the decision if a real operation exists for it.
+    const applicationResult = await applicator.apply(created);
+
+    return c.json(
+      {
+        decision: created,
+        applied: applicationResult.applied,
+        applicationError: applicationResult.error,
+      },
+      201,
+    );
   });
 
   return app;

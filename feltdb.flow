@@ -175,6 +175,27 @@ app OpenDots {
     createdAt: datetime
   }
 
+  // Application of decisions to real control-plane operations.
+  //
+  // Only dismiss currently has a corresponding operation (resolve). Other decisions
+  // remain declarative. Application is idempotent: one decision creates at most one
+  // application record, keyed by the immutable decision identity.
+  //
+  // Status describes the application attempt, not the human decision:
+  // pending = operation in progress
+  // applied = operation completed successfully
+  // failed = operation failed before completion
+  collection decision_applications {
+    id: text
+    decisionId: ref decisions
+    operation: enum(resolve)
+    status: enum(pending, applied, failed)
+    createdAt: datetime
+    completedAt: datetime?
+    errorCode: text?
+    error: text?
+  }
+
   collection memories {
     id: text
     text: text

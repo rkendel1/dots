@@ -64,7 +64,7 @@ describe('feltdb.flow contract validation', () => {
       { encoding: 'utf8' },
     );
     expect(stdout).toContain('OpenDots');
-    expect(stdout).toContain('21 collections');
+    expect(stdout).toContain('22 collections');
   });
 
   /**
@@ -123,9 +123,9 @@ describe('contract / runtime / migration collection agreement', () => {
     for (const collection of declared) expect(known.has(collection)).toBe(true);
   });
 
-  it('covers all 21 runtime collections', () => {
-    expect(runtime).toHaveLength(21);
-    expect(declared).toHaveLength(21);
+  it('covers all 22 runtime collections', () => {
+    expect(runtime).toHaveLength(22);
+    expect(declared).toHaveLength(22);
   });
 
   it('declares no collection twice', () => {

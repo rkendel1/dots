@@ -13,6 +13,7 @@ import { VoiceService } from './voice.js';
 import { workspaceRoutes } from './workspace-routes.js';
 import type { AttentionStore } from './attention.js';
 import type { DecisionStore } from './decisions.js';
+import type { DecisionApplicator } from './decision-applicator.js';
 import type { ExecutionService } from './execution-service.js';
 import type { ExecutionReconciler } from './execution-reconciler.js';
 import { executionRoutes } from './execution-routes.js';
@@ -54,6 +55,13 @@ export interface AppOptions {
    */
   decisions?: DecisionStore;
   /**
+   * The decision applicator for applying decisions to control-plane operations.
+   *
+   * Optional; used only when both decisions and attention are present. Applies
+   * decisions that have corresponding real operations (currently only dismiss).
+   */
+  applicator?: DecisionApplicator;
+  /**
    * The owner ID for recording which human made a decision.
    *
    * Used when creating decisions to identify the actor. Optional; decisions
@@ -72,6 +80,7 @@ export function createApp({
   reconciler,
   attention,
   decisions,
+  applicator,
   ownerId,
 }: AppOptions) {
   const app = new Hono();
@@ -133,14 +142,15 @@ export function createApp({
         tasks: store,
       }),
     );
-  if (attention && decisions && ownerId && executions)
-    // Decision routes need attention store, decision store, and owner identity.
-    // They are mounted only when all three are present along with executions.
+  if (attention && decisions && ownerId && executions && applicator)
+    // Decision routes need attention store, decision store, applicator, owner identity,
+    // and executions. They are mounted only when all are present.
     app.route(
       '/api',
       decisionRoutes({
         decisions,
         attention,
+        applicator,
         ownerId,
       }),
     );
