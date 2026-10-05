@@ -6,6 +6,7 @@ import type {
   Settings,
   Task,
   TaskEvent,
+  ManagedConfiguration,
 } from '../shared/types.js';
 import {
   byTimestampDesc,
@@ -59,6 +60,12 @@ export interface EventRecord extends Omit<TaskEvent, 'id'>, StorageFence {
 
 export interface MemoryRecord extends Memory, StorageFence {}
 
+/**
+ * Managed configuration persisted through FeltDB.
+ * Stores non-secret configuration that can be edited through the UI.
+ */
+export interface ConfigurationRecord extends ManagedConfiguration, StorageFence {}
+
 /** The one key the settings singleton lives at. */
 export const SETTINGS_KEY = 'settings';
 
@@ -68,6 +75,7 @@ export interface StoreCollections {
   runs: Collection<RunRecord>;
   events: Collection<EventRecord>;
   memories: Collection<MemoryRecord>;
+  configurations: Collection<ConfigurationRecord>;
 }
 
 export function storeCollections(db: StateFirstDB): StoreCollections {
@@ -77,6 +85,7 @@ export function storeCollections(db: StateFirstDB): StoreCollections {
     runs: db.collection<RunRecord>('runs'),
     events: db.collection<EventRecord>('task_events'),
     memories: db.collection<MemoryRecord>('memories'),
+    configurations: db.collection<ConfigurationRecord>('configurations'),
   };
 }
 
@@ -125,4 +134,8 @@ export function toSettings(record: SettingsRecord): Settings {
   void _fence;
   void _id;
   return settings;
+}
+
+export function toConfiguration(record: ConfigurationRecord): ManagedConfiguration {
+  return { ...withoutStorageFields(record), id: record.id };
 }

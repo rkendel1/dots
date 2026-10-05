@@ -18,6 +18,9 @@ import type { DecisionProposalStore } from './decision-proposals.js';
 import type { ExecutionService } from './execution-service.js';
 import type { ExecutionReconciler } from './execution-reconciler.js';
 import { executionRoutes } from './execution-routes.js';
+import { configurationRoutes } from './configuration-routes.js';
+import type { ConfigurationService } from './configuration.js';
+import type { PlatformConfig } from './platform-config.js';
 const interval = z.number().int().min(60).max(31_536_000).nullable();
 export interface AppOptions {
   store: Store;
@@ -26,6 +29,8 @@ export interface AppOptions {
   ownerToken?: string;
   origin?: string;
   platform?: Platform;
+  configService?: ConfigurationService;
+  platformConfig?: PlatformConfig;
   /**
    * The execution control layer.
    *
@@ -91,6 +96,8 @@ export function createApp({
   applicator,
   ownerId,
   proposals,
+  configService,
+  platformConfig,
 }: AppOptions) {
   const app = new Hono();
   app.use(
@@ -171,6 +178,8 @@ export function createApp({
     );
   const voice = platform ? new VoiceService(platform) : undefined;
   if (platform && voice) app.route('/api', workspaceRoutes(platform, voice));
+  if (configService && platformConfig)
+    app.route('/api', configurationRoutes(configService, platformConfig));
   app.get('/api/state', async (c) =>
     c.json({
       settings: await store.settings(),
