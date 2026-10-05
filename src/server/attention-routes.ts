@@ -8,6 +8,7 @@
  *   GET  /attention                    list, filtered by status / kind / active
  *   GET  /attention/:id                read one
  *   GET  /attention/:id/context        read the live Work/Task/Execution chain
+ *   GET  /attention/:id/history        durable causal chain (requires decisions/applicator)
  *   POST /attention/:id/acknowledge    "I have seen this"
  *   POST /attention/:id/resolve        "this no longer needs anyone"
  *
@@ -20,6 +21,9 @@
  * Context is a separate endpoint rather than a field on the item because it is
  * *not* a property of the item. It is resolved live from the records the item
  * references, so it must not be able to be cached alongside a list.
+ *
+ * History is a separate endpoint and read model: it reconstructs the durable
+ * causal chain (Attention → Decision → Application) from existing records.
  */
 import { Hono } from 'hono';
 import type { AttentionKind, AttentionStatus } from '../shared/types.js';
@@ -29,6 +33,9 @@ import { resolveContext } from './attention-context.js';
 import type { ExecutionStore } from './executions.js';
 import type { Store } from './store.js';
 import { attentionIdFor } from './attention-collections.js';
+import type { DecisionStore } from './decisions.js';
+import type { DecisionApplicator } from './decision-applicator.js';
+import { buildAttentionHistory } from './attention-history.js';
 
 const KINDS: AttentionKind[] = [
   'execution_failed',
@@ -39,10 +46,26 @@ const KINDS: AttentionKind[] = [
 ];
 const STATUSES: AttentionStatus[] = ['open', 'acknowledged', 'resolved'];
 
+export interface AttentionRoutesOptions {
+  store: AttentionStore;
+  sources: { executions: ExecutionStore; tasks: Store };
+  decisions?: DecisionStore;
+  applicator?: DecisionApplicator;
+}
+
 export function attentionRoutes(
-  store: AttentionStore,
-  sources: { executions: ExecutionStore; tasks: Store },
+  storeOrOptions: AttentionStore | AttentionRoutesOptions,
+  sourcesOrUndefined?: { executions: ExecutionStore; tasks: Store },
 ): Hono {
+  // Support both old and new calling conventions for backward compatibility
+  const store =
+    storeOrOptions instanceof Object && 'store' in storeOrOptions
+      ? storeOrOptions.store
+      : (storeOrOptions as AttentionStore);
+  const sources =
+    sourcesOrUndefined ?? (storeOrOptions as AttentionRoutesOptions).sources;
+  const decisions = (storeOrOptions as AttentionRoutesOptions).decisions;
+  const applicator = (storeOrOptions as AttentionRoutesOptions).applicator;
   const app = new Hono();
 
   app.get('/attention', async (c) => {
@@ -96,6 +119,25 @@ export function attentionRoutes(
         runs: (detail?.runs ?? []).slice(0, 5),
       }),
     });
+  });
+
+  app.get('/attention/:id/history', async (c) => {
+    const attentionId = c.req.param('id');
+    const item = await store.get(attentionId);
+    if (!item) return c.json({ error: 'Attention item not found.' }, 404);
+
+    // History requires decisions and applicator. If not provided, history is empty.
+    if (!decisions || !applicator) {
+      return c.json({ history: { events: [] } });
+    }
+
+    const decisionList = await decisions.listForAttention(attentionId);
+    const applicationMap = await applicator.getApplications(
+      decisionList.map((d) => d.id),
+    );
+
+    const history = buildAttentionHistory(item, decisionList, applicationMap);
+    return c.json({ history });
   });
 
   app.post('/attention/:id/acknowledge', async (c) => {

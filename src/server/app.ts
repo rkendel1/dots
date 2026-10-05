@@ -137,9 +137,14 @@ export function createApp({
     // routes are mounted only when the execution plane is present.
     app.route(
       '/api',
-      attentionRoutes(attention, {
-        executions: executions.executions,
-        tasks: store,
+      attentionRoutes({
+        store: attention,
+        sources: {
+          executions: executions.executions,
+          tasks: store,
+        },
+        decisions,
+        applicator,
       }),
     );
   if (attention && decisions && ownerId && executions && applicator)
