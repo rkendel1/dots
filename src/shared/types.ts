@@ -366,6 +366,16 @@ export interface ComputerConfiguration {
   engineSocket?: string;
 }
 
+/** Compute configuration domain model. */
+export interface ComputeConfiguration {
+  endpoint?: string;
+  available: boolean;
+  protocol?: string;
+  version?: string;
+  runtimes: string[];
+  error?: string;
+}
+
 /** Core configuration domain model. */
 export interface CoreConfiguration {
   ownerId?: string;
@@ -383,6 +393,7 @@ export interface ConfigurationReadModel {
     voice: VoiceConfiguration;
     slack: SlackConfiguration;
     computers: ComputerConfiguration;
+    compute: ComputeConfiguration;
   };
   requirements: ConfigurationRequirement[];
 }
@@ -390,7 +401,7 @@ export interface ConfigurationReadModel {
 /** Configuration requirement for setup completion. */
 export interface ConfigurationRequirement {
   id: string;
-  section: 'core' | 'intelligence' | 'browser' | 'voice' | 'slack' | 'computers';
+  section: 'core' | 'intelligence' | 'browser' | 'voice' | 'slack' | 'computers' | 'compute';
   label: string;
   required: boolean;
   configured: boolean;

@@ -23,7 +23,8 @@ export type ConfigurationSectionId =
   | 'browser'
   | 'voice'
   | 'slack'
-  | 'computers';
+  | 'computers'
+  | 'compute';
 
 /**
  * Where a setting's effective value came from.

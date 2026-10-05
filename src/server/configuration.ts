@@ -7,6 +7,7 @@ import type {
 } from '../shared/types.js';
 import { storeCollections, toConfiguration, type ConfigurationRecord } from './store-collections.js';
 import type { PlatformConfig } from './platform-config.js';
+import { ComputeReadinessStore } from './compute-readiness-store.js';
 
 /**
  * Configuration service that manages the application's non-secret configuration.
@@ -18,10 +19,12 @@ import type { PlatformConfig } from './platform-config.js';
 export class ConfigurationService {
   private db: StateFirstDB;
   private ownerId: string;
+  private computeReadiness: ComputeReadinessStore;
 
   constructor(db: StateFirstDB, ownerId: string) {
     this.db = db;
     this.ownerId = ownerId;
+    this.computeReadiness = new ComputeReadinessStore(db);
   }
 
   /**
@@ -43,6 +46,7 @@ export class ConfigurationService {
    */
   async getConfiguration(config: PlatformConfig): Promise<ConfigurationReadModel> {
     const managed = await this.getManagedConfiguration();
+    const computeState = await this.computeReadiness.current();
 
     // Merge environment and managed configuration
     const merged: ConfigurationReadModel = {
@@ -84,6 +88,14 @@ export class ConfigurationService {
           memoryBytes: managed?.computers?.memoryBytes,
           runtime: managed?.computers?.runtime,
           engineSocket: managed?.computers?.engineSocket,
+        },
+        compute: {
+          endpoint: config.computeEndpoint,
+          available: computeState?.available ?? false,
+          protocol: computeState?.protocol,
+          version: computeState?.version,
+          runtimes: computeState?.runtimes?.map((r) => r.runtime) ?? [],
+          error: computeState?.error,
         },
       },
       requirements: this.getRequirements(config),

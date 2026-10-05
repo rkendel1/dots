@@ -196,6 +196,19 @@ export const SETTINGS: readonly SettingDefinition[] = [
     kind: 'url',
     editable: true,
   },
+
+  /* ── Compute ────────────────────────────────────────────────────────────
+   * Compute endpoint for portable workload execution and agent runtime access.
+   * Non-secret configuration; credentials remain in the secret boundary.
+   */
+  {
+    id: 'compute.endpoint',
+    section: 'compute',
+    label: 'Compute endpoint',
+    env: 'COMPUTE_ENDPOINT',
+    kind: 'url',
+    editable: true,
+  },
 ];
 
 /**
@@ -263,6 +276,7 @@ export const SECTION_LABELS: Record<ConfigurationSectionId, string> = {
   voice: 'Voice',
   slack: 'Slack',
   computers: 'Computers',
+  compute: 'Compute',
 };
 
 /**

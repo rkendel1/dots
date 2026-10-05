@@ -254,4 +254,16 @@ app OpenDots {
     outcome: text
     createdAt: datetime
   }
+
+  collection compute_readiness {
+    id: text
+    available: boolean
+    protocol: text?
+    version: text?
+    capabilities: json?
+    runtimes: json?
+    checkedAt: datetime
+    error: text?
+    errorCode: text?
+  }
 }

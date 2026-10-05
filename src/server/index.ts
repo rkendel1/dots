@@ -24,6 +24,8 @@ import { WorkspaceStore } from './workspace.js';
 import { Platform } from './platform.js';
 import type { PlatformConfig } from './platform-config.js';
 import { ConfigurationService } from './configuration.js';
+import { capabilityDiscoveryFromEnv } from './compute-capability-discovery.js';
+import { ComputeReadinessStore } from './compute-readiness-store.js';
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 4310);
 const ownerToken = process.env.OWNER_TOKEN;
@@ -116,7 +118,18 @@ const config: PlatformConfig = {
   slackDotId: process.env.SLACK_DOT_ID || undefined,
   runtimeUrl: `http://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/api/copilotkit`,
   ownerToken,
+  computeEndpoint: process.env.COMPUTE_ENDPOINT || undefined,
 };
+
+// Initialize Compute capability discovery and perform initial readiness check
+const computeDiscovery = capabilityDiscoveryFromEnv();
+const computeReadiness = new ComputeReadinessStore(state.db);
+
+if (computeDiscovery) {
+  // Perform initial readiness check
+  const readinessReport = await computeDiscovery.fullReadinessCheck();
+  await computeReadiness.update(readinessReport);
+}
 const platform = await Platform.create(store, workspace, config);
 const configService = new ConfigurationService(state.db, workspace.ownerId);
 const researchConfig = {

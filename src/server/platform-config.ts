@@ -21,6 +21,7 @@ export interface PlatformConfig {
   slackDotId?: string;
   runtimeUrl: string;
   ownerToken?: string;
+  computeEndpoint?: string;
 }
 export function setupStatus(
   config: PlatformConfig,
