@@ -206,6 +206,16 @@ export interface Decision {
   createdAt: number;
 }
 
+export interface ProposalRecord {
+  id: string;
+  attentionId: string;
+  agentId: string;
+  agentVersion?: string;
+  decision: DecisionValue;
+  rationale: string;
+  createdAt: number;
+}
+
 export interface Source {
   title: string;
   url: string;

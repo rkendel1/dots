@@ -20,11 +20,17 @@ import type {
   AttentionContext,
   Decision,
   DecisionValue,
+  ProposalRecord,
 } from '../shared/types';
 
 interface DecisionsResponse {
   decisions: Decision[];
   legalDecisions: DecisionValue[];
+  attention: Attention;
+}
+
+interface ProposalsResponse {
+  proposals: ProposalRecord[];
   attention: Attention;
 }
 
@@ -44,8 +50,10 @@ function AttentionContextPane({
   const [context, setContext] = useState<AttentionContext>();
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [legalDecisions, setLegalDecisions] = useState<DecisionValue[]>([]);
+  const [proposals, setProposals] = useState<ProposalRecord[]>([]);
   const [error, setError] = useState('');
   const [decisionError, setDecisionError] = useState('');
+  const [proposalError, setProposalError] = useState('');
   const [submitting, setSubmitting] = useState('');
 
   useEffect(() => {
@@ -80,15 +88,35 @@ function AttentionContextPane({
     };
   }, [id]);
 
+  useEffect(() => {
+    let current = true;
+    setProposals([]);
+    setProposalError('');
+    api<ProposalsResponse>(`/attention/${id}/proposals`)
+      .then((body) => {
+        if (current) {
+          setProposals(body.proposals);
+        }
+      })
+      .catch((e: Error) => current && setProposalError(e.message));
+    return () => {
+      current = false;
+    };
+  }, [id]);
+
   const submitDecision = async (decision: DecisionValue) => {
     setSubmitting(decision);
     setDecisionError('');
     try {
       await api(`/attention/${id}/decisions`, 'POST', { decision });
-      // Reload decisions from the server to reflect the new state
-      const body = await api<DecisionsResponse>(`/attention/${id}/decisions`);
-      setDecisions(body.decisions);
-      setLegalDecisions(body.legalDecisions);
+      // Reload decisions and proposals from the server to reflect the new state
+      const [decisionBody, proposalBody] = await Promise.all([
+        api<DecisionsResponse>(`/attention/${id}/decisions`),
+        api<ProposalsResponse>(`/attention/${id}/proposals`),
+      ]);
+      setDecisions(decisionBody.decisions);
+      setLegalDecisions(decisionBody.legalDecisions);
+      setProposals(proposalBody.proposals);
       onChanged?.();
     } catch (e: unknown) {
       setDecisionError((e as Error).message);
@@ -172,6 +200,48 @@ function AttentionContextPane({
             ))}
           </dd>
         </dl>
+      )}
+
+      {proposals.length > 0 && (
+        <div>
+          <h4>Agent proposals</h4>
+          {proposalError && <p className="chat-error">{proposalError}</p>}
+          <div className="attention-proposals">
+            {proposals.map((proposal) => (
+              <div key={proposal.id} className="attention-proposal">
+                <div className="attention-proposal-header">
+                  <span className="attention-proposal-agent">
+                    {proposal.agentId}
+                    {proposal.agentVersion && (
+                      <span className="attention-proposal-version">
+                        {proposal.agentVersion}
+                      </span>
+                    )}
+                  </span>
+                  <span className="attention-proposal-time">
+                    {new Date(proposal.createdAt).toLocaleString()}
+                  </span>
+                </div>
+                <div className="attention-proposal-decision">
+                  <strong>Suggested action</strong>
+                  <span>{proposal.decision}</span>
+                </div>
+                <div className="attention-proposal-rationale">
+                  <strong>Rationale</strong>
+                  <p>{proposal.rationale}</p>
+                </div>
+                <div className="attention-proposal-actions">
+                  <button
+                    onClick={() => void submitDecision(proposal.decision)}
+                    disabled={submitting !== ''}
+                  >
+                    {submitting === proposal.decision ? 'Accepting…' : 'Accept'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {legalDecisions.length > 0 && (

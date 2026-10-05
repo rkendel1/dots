@@ -4300,3 +4300,88 @@ h3 {
   flex-wrap: wrap;
   gap: 6px;
 }
+
+.attention-proposals {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.attention-proposal {
+  padding: 12px;
+  background: rgba(120, 180, 200, 0.05);
+  border: 1px solid rgba(120, 180, 200, 0.2);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attention-proposal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.attention-proposal-agent {
+  font-weight: 600;
+  color: var(--blue-dark);
+}
+
+.attention-proposal-version {
+  opacity: 0.6;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.attention-proposal-time {
+  opacity: 0.6;
+  font-size: 11px;
+}
+
+.attention-proposal-decision {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.attention-proposal-decision strong {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  opacity: 0.7;
+  letter-spacing: 0.5px;
+}
+
+.attention-proposal-decision span {
+  font-weight: 600;
+  color: var(--blue-dark);
+}
+
+.attention-proposal-rationale {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.attention-proposal-rationale strong {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  opacity: 0.7;
+  letter-spacing: 0.5px;
+}
+
+.attention-proposal-rationale p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.attention-proposal-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
