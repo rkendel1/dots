@@ -36,6 +36,8 @@ import { attentionIdFor } from './attention-collections.js';
 import type { DecisionStore } from './decisions.js';
 import type { DecisionApplicator } from './decision-applicator.js';
 import { buildAttentionHistory } from './attention-history.js';
+import type { DecisionProposalStore } from './decision-proposals.js';
+import { decisionProposalRoutes } from './decision-proposal-routes.js';
 
 const KINDS: AttentionKind[] = [
   'execution_failed',
@@ -51,6 +53,7 @@ export interface AttentionRoutesOptions {
   sources: { executions: ExecutionStore; tasks: Store };
   decisions?: DecisionStore;
   applicator?: DecisionApplicator;
+  proposals?: DecisionProposalStore;
 }
 
 export function attentionRoutes(
@@ -66,6 +69,7 @@ export function attentionRoutes(
     sourcesOrUndefined ?? (storeOrOptions as AttentionRoutesOptions).sources;
   const decisions = (storeOrOptions as AttentionRoutesOptions).decisions;
   const applicator = (storeOrOptions as AttentionRoutesOptions).applicator;
+  const proposals = (storeOrOptions as AttentionRoutesOptions).proposals;
   const app = new Hono();
 
   app.get('/attention', async (c) => {
@@ -135,8 +139,16 @@ export function attentionRoutes(
     const applicationMap = await applicator.getApplications(
       decisionList.map((d) => d.id),
     );
+    const proposalList = proposals
+      ? await proposals.getProposalsForAttention(attentionId)
+      : undefined;
 
-    const history = buildAttentionHistory(item, decisionList, applicationMap);
+    const history = buildAttentionHistory(
+      item,
+      decisionList,
+      applicationMap,
+      proposalList,
+    );
     return c.json({ history });
   });
 
@@ -153,6 +165,10 @@ export function attentionRoutes(
     if (!item) return c.json({ error: 'Attention item not found.' }, 404);
     return c.json({ attention: item, needsAttention: needsAttention(item) });
   });
+
+  if (store && proposals) {
+    app.route('/', decisionProposalRoutes({ attention: store, proposals }));
+  }
 
   return app;
 }

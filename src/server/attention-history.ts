@@ -3,20 +3,23 @@
  *
  * History reconstructs the causal chain from immutable durable records:
  * - Attention creation and resolution
+ * - Agent proposals
  * - Decision recording
  * - Decision application status and outcomes
  *
  * History is a computed read model: pure function of existing facts.
  * No new persistence layer is required; all events derive from existing
- * collections (attention, decisions, decision_applications).
+ * collections (attention, decision_proposals, decisions, decision_applications).
  */
 
 import type { Decision } from '../shared/types.js';
 import type { Attention } from '../shared/types.js';
 import type { DecisionApplicationRecord } from './decision-application-collections.js';
+import type { DecisionProposalRecord } from './decision-proposal-collections.js';
 
 export type HistoryEventType =
   | 'attention.created'
+  | 'decision.proposed'
   | 'decision.recorded'
   | 'decision.application_started'
   | 'decision.application_applied'
@@ -28,6 +31,10 @@ export interface HistoryEvent {
   timestamp: number;
   decision?: string;
   actor?: string;
+  agent?: string;
+  agentVersion?: string;
+  rationale?: string;
+  proposalId?: string;
   status?: string;
   error?: string;
   errorCode?: string;
@@ -40,9 +47,9 @@ export interface AttentionHistory {
 /**
  * Build the complete history for an Attention item from durable records.
  *
- * Returns chronologically ordered events derived from Attention, Decision, and
- * DecisionApplication records. Every event must correspond to actual durable
- * facts; no events are invented.
+ * Returns chronologically ordered events derived from Attention, DecisionProposal,
+ * Decision, and DecisionApplication records. Every event must correspond to actual
+ * durable facts; no events are invented.
  *
  * History remains valid across restarts because all facts are durable.
  */
@@ -50,6 +57,7 @@ export function buildAttentionHistory(
   attention: Attention,
   decisions: Decision[],
   applications: Map<string, DecisionApplicationRecord | undefined>,
+  proposals?: DecisionProposalRecord[],
 ): AttentionHistory {
   const events: HistoryEvent[] = [];
 
@@ -59,7 +67,22 @@ export function buildAttentionHistory(
     timestamp: attention.createdAt,
   });
 
-  // 2. Decisions and their applications, in order
+  // 2. Agent proposals, in order
+  if (proposals) {
+    for (const proposal of proposals) {
+      events.push({
+        type: 'decision.proposed',
+        timestamp: proposal.createdAt,
+        proposalId: proposal.id,
+        agent: proposal.agentId,
+        agentVersion: proposal.agentVersion || undefined,
+        decision: proposal.decision,
+        rationale: proposal.rationale,
+      });
+    }
+  }
+
+  // 3. Decisions and their applications, in order
   for (const decision of decisions) {
     // Record the decision itself
     events.push({
@@ -97,7 +120,7 @@ export function buildAttentionHistory(
     // If no application exists, the decision remains declarative (no event)
   }
 
-  // 3. Attention resolved (if ever)
+  // 4. Attention resolved (if ever)
   if (attention.resolvedAt) {
     events.push({
       type: 'attention.resolved',

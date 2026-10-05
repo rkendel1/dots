@@ -14,6 +14,7 @@ import { workspaceRoutes } from './workspace-routes.js';
 import type { AttentionStore } from './attention.js';
 import type { DecisionStore } from './decisions.js';
 import type { DecisionApplicator } from './decision-applicator.js';
+import type { DecisionProposalStore } from './decision-proposals.js';
 import type { ExecutionService } from './execution-service.js';
 import type { ExecutionReconciler } from './execution-reconciler.js';
 import { executionRoutes } from './execution-routes.js';
@@ -68,6 +69,13 @@ export interface AppOptions {
    * routes are only mounted when both this and the decision store are present.
    */
   ownerId?: string;
+  /**
+   * The decision proposal store for agent-suggested decisions.
+   *
+   * Optional; proposal routes are only mounted when attention is also present.
+   * Proposals are durable records of agent suggestions but do not authorize anything.
+   */
+  proposals?: DecisionProposalStore;
 }
 export function createApp({
   store,
@@ -82,6 +90,7 @@ export function createApp({
   decisions,
   applicator,
   ownerId,
+  proposals,
 }: AppOptions) {
   const app = new Hono();
   app.use(
@@ -145,6 +154,7 @@ export function createApp({
         },
         decisions,
         applicator,
+        proposals,
       }),
     );
   if (attention && decisions && ownerId && executions && applicator)

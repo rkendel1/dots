@@ -196,6 +196,26 @@ app OpenDots {
     error: text?
   }
 
+  // Agent proposals for decisions about attention items.
+  //
+  // An agent may observe Attention context and propose what should happen, but
+  // proposals are suggestions only. They cannot authorize, execute, or modify
+  // anything. A human must review and explicitly create a Decision to act.
+  //
+  // Proposals are immutable and indexed by deterministic identity (attention +
+  // agent + decision), making them safely retryable. Multiple proposals per
+  // attention are allowed (same agent suggesting different actions, or different
+  // agents suggesting different things).
+  collection decision_proposals {
+    id: text
+    attentionId: ref attention
+    agentId: text
+    agentVersion: text?
+    decision: enum(approve, reject, retry, dismiss)
+    rationale: text
+    createdAt: datetime
+  }
+
   collection memories {
     id: text
     text: text
