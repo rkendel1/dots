@@ -137,6 +137,7 @@ const EXPECTED = [
   'executions',
   'attention',
   'decisions',
+  'decision_applications',
 ];
 
 /**
@@ -144,12 +145,17 @@ const EXPECTED = [
  *
  * `executions` arrived in 0.2.0 and `attention` alongside it, both long after
  * SQLite was retired as a runtime store, so the Phase 6 migration has nothing to
- * import into either. `decisions` came with the human-decision layer feature and
- * has no legacy source. They are listed here explicitly rather than folded into the
- * planner, so adding another post-SQLite collection is a deliberate edit to this
- * file rather than an accident.
+ * import into either. `decisions` and `decision_applications` came with the human-decision
+ * layer feature and have no legacy source. They are listed here explicitly rather than
+ * folded into the planner, so adding another post-SQLite collection is a deliberate edit
+ * to this file rather than an accident.
  */
-const NOT_MIGRATED = new Set(['executions', 'attention', 'decisions']);
+const NOT_MIGRATED = new Set([
+  'executions',
+  'attention',
+  'decisions',
+  'decision_applications',
+]);
 
 describe('every runtime collection is FeltDB-backed', () => {
   const opened = new Set<string>();
@@ -167,7 +173,7 @@ describe('every runtime collection is FeltDB-backed', () => {
 
   it('opens exactly the twenty-one expected collections', () => {
     expect([...opened].sort()).toEqual([...EXPECTED].sort());
-    expect(EXPECTED).toHaveLength(21);
+    expect(EXPECTED).toHaveLength(22);
   });
 
   it('imports every migrated collection, and the runtime opens each one', async () => {

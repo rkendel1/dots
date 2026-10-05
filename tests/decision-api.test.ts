@@ -13,11 +13,13 @@ import { Hono } from 'hono';
 import { openFeltState } from '../src/server/felt/state.js';
 import { AttentionStore } from '../src/server/attention.js';
 import { DecisionStore } from '../src/server/decisions.js';
+import { DecisionApplicator } from '../src/server/decision-applicator.js';
 import { decisionRoutes } from '../src/server/decision-routes.js';
 import type { Attention, AttentionKind } from '../src/shared/types.js';
 
 let attention: AttentionStore;
 let decisions: DecisionStore;
+let applicator: DecisionApplicator;
 let app: Hono;
 
 beforeEach(() => {
@@ -27,9 +29,11 @@ beforeEach(() => {
   });
   attention = new AttentionStore(state.db);
   decisions = new DecisionStore(state.db);
+  applicator = new DecisionApplicator(state.db, decisions, attention);
   app = decisionRoutes({
     decisions,
     attention,
+    applicator,
     ownerId: 'test-owner',
   });
 });

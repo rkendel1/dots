@@ -211,7 +211,7 @@ describe('release artifact — the installed package works standalone', () => {
       true,
     );
     expect(resolved.app).toBe('OpenDots');
-    expect(resolved.n).toBe(21);
+    expect(resolved.n).toBe(22);
     // And it is this package's copy, not a stray checkout the install could reach.
     expect(realpathSync(dirname(resolved.path))).toBe(
       realpathSync(join(root(), 'dist')),
@@ -225,7 +225,7 @@ describe('release artifact — the installed package works standalone', () => {
       installed,
     );
     expect(out).toContain('OpenDots');
-    expect(out).toContain('21 collections');
+    expect(out).toContain('22 collections');
   });
 
   it('rejects a malformed contract through the same pinned CLI', () => {
@@ -252,7 +252,7 @@ describe('release artifact — the installed package works standalone', () => {
       'OpenDots on FeltDB',
     );
     const status = run([process.execPath, cli, 'status'], installed);
-    expect(status).toContain('21 collections declared');
+    expect(status).toContain('22 collections declared');
     expect(status).toMatch(/namespace\s+opendots/);
     expect(run([process.execPath, cli, 'stop'], installed)).toContain(
       'foreground',
