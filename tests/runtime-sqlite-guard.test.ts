@@ -135,17 +135,19 @@ const EXPECTED = [
   'computer_permissions',
   'computer_audit',
   'executions',
+  'attention',
 ];
 
 /**
  * Collections the runtime opens that have no legacy SQLite source.
  *
- * `executions` arrived in 0.2.0, long after SQLite was retired as a runtime
- * store, so the Phase 6 migration has nothing to import into it. It is listed here
- * explicitly rather than folded into the planner, so adding another post-SQLite
- * collection is a deliberate edit to this file rather than an accident.
+ * `executions` arrived in 0.2.0 and `attention` alongside it, both long after
+ * SQLite was retired as a runtime store, so the Phase 6 migration has nothing to
+ * import into either. They are listed here explicitly rather than folded into the
+ * planner, so adding another post-SQLite collection is a deliberate edit to this
+ * file rather than an accident.
  */
-const NOT_MIGRATED = new Set(['executions']);
+const NOT_MIGRATED = new Set(['executions', 'attention']);
 
 describe('every runtime collection is FeltDB-backed', () => {
   const opened = new Set<string>();
@@ -161,9 +163,9 @@ describe('every runtime collection is FeltDB-backed', () => {
       opened.add(match[1]!);
   }
 
-  it('opens exactly the nineteen expected collections', () => {
+  it('opens exactly the twenty expected collections', () => {
     expect([...opened].sort()).toEqual([...EXPECTED].sort());
-    expect(EXPECTED).toHaveLength(19);
+    expect(EXPECTED).toHaveLength(20);
   });
 
   it('imports every migrated collection, and the runtime opens each one', async () => {

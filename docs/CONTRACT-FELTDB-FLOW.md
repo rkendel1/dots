@@ -26,7 +26,7 @@ FeltDB
 
 ## The contract
 
-[`feltdb.flow`](../feltdb.flow) declares the application and all 19 runtime
+[`feltdb.flow`](../feltdb.flow) declares the application and all 20 runtime
 collections, with real fields and real `ref` relationships:
 
 ```
@@ -57,7 +57,7 @@ It is written in FeltDB's FlowSpec syntax — the one the **installed
 
 ```
 $ node node_modules/@feltdb/core/bin/feltdb.js validate feltdb.flow
-✓ OpenDots: 19 collections, 0 capabilities, 0 workflows, 0 agents
+✓ OpenDots: 20 collections, 0 capabilities, 0 workflows, 0 agents
 ```
 
 CI runs exactly this. It invokes the pinned binary by path rather than `npx

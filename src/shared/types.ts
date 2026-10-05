@@ -97,6 +97,101 @@ export interface Execution {
   reconciliationError: string | null;
 }
 
+/**
+ * Attention — what OpenDots believes a human may need to look at.
+ *
+ * This is the control plane's own interpretation, not a second copy of any
+ * durable record. An item names a *condition* and points at the entity that
+ * carries it; the current state of that entity is resolved at read time. That is
+ * what stops this from becoming a stale cache of execution status.
+ *
+ * The vocabulary is deliberately small. Each kind answers one question a person
+ * could otherwise only answer by reading raw provider state, and none of them
+ * exist to predict notification types that have not been needed yet.
+ */
+export type AttentionKind =
+  /** The provider reported this execution failed. It will not retry itself. */
+  | 'execution_failed'
+  /**
+   * The execution cannot progress: it has no provider identity and has been
+   * unable to obtain one, so nothing is running and nothing is running away.
+   */
+  | 'execution_blocked'
+  /** The execution finished but its result has not been retrieved yet. */
+  | 'execution_evidence_pending'
+  /** OpenDots could not reach the provider, so no execution state is trustworthy. */
+  | 'provider_unreachable'
+  /** A durable Work/Task state is waiting on a person to decide something. */
+  | 'human_decision_required';
+
+export type AttentionSeverity = 'info' | 'warning' | 'critical';
+
+/**
+ * The human-facing lifecycle.
+ *
+ * `acknowledged` is a real, distinct state and not a synonym for `resolved`:
+ * acknowledging says "I have seen this", resolving says "this no longer needs
+ * anyone". A failed execution stays `open` forever if nobody acts on it, because
+ * reaching a terminal state is not the same as being dealt with.
+ */
+export type AttentionStatus = 'open' | 'acknowledged' | 'resolved';
+
+/** What an attention item points at. Never a copy of it. */
+export type AttentionSourceType = 'execution' | 'task' | 'provider';
+
+export interface Attention {
+  id: string;
+  kind: AttentionKind;
+  severity: AttentionSeverity;
+  status: AttentionStatus;
+  /** One line, stable enough to scan in a list. */
+  title: string;
+  /** A sentence or two saying why this exists. */
+  summary: string;
+  sourceType: AttentionSourceType;
+  /** The id of the entity carrying the condition — an execution, task, or provider name. */
+  sourceId: string;
+  createdAt: number;
+  updatedAt: number;
+  /** When a person acknowledged it. Null until they do. */
+  acknowledgedAt: number | null;
+  /** When a person resolved it. Null until they do. */
+  resolvedAt: number | null;
+  /**
+   * When OpenDots observed the underlying condition to be false.
+   *
+   * Distinct from `resolvedAt` on purpose. An outage that clears leaves
+   * `conditionClearedAt` set while the item stays `open`, because nobody has
+   * decided anything — it simply stopped being a live problem. Conflating the
+   * two would let a system observation masquerade as a human decision.
+   */
+  conditionClearedAt: number | null;
+}
+
+/**
+ * The live state behind one attention item.
+ *
+ * Assembled at read time by walking the records the item references, never from
+ * a copy stored on the item. Lives in `shared/` because it crosses into the
+ * browser as the shape of a response — it is the answer to "why am I seeing
+ * this?", and both sides must agree on its shape.
+ */
+export interface AttentionContext {
+  attention: Attention;
+  /** The execution carrying the condition, when there is one. */
+  execution: Execution | null;
+  /** The task the execution belongs to, when it names one. */
+  task: Task | null;
+  /** Recent runs of that task, newest first. */
+  runs: Run[];
+  /**
+   * True when the referenced entity no longer exists, so the UI can say "this
+   * referred to a task that was deleted" instead of rendering an empty panel
+   * that looks like a bug.
+   */
+  sourceMissing: boolean;
+}
+
 export interface Source {
   title: string;
   url: string;

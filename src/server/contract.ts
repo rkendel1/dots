@@ -50,6 +50,7 @@ export const RUNTIME_COLLECTIONS = [
   'task_threads',
   'runs',
   'executions',
+  'attention',
   'task_events',
   'memories',
   'calls',

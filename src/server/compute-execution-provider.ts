@@ -341,6 +341,14 @@ export class ComputeExecutionProvider implements ExecutionProvider {
     // earlier would produce a provider error, not an empty result, and pretending
     // otherwise is exactly the fabrication this boundary exists to prevent.
     if (terminal) {
+      // The result is read opportunistically and is deliberately allowed to be
+      // missing. Evidence seals independently of the outcome: a job can be
+      // `succeeded` for minutes before its result is published, and a receipt
+      // longer still. Letting a sealed-but-unavailable result abort this read
+      // would pin the execution in `running` forever — the very state it has
+      // already left. So the status is reported regardless, and the missing
+      // payload is left to the separate retrieval path, which retries and records
+      // whatever actually goes wrong.
       try {
         const payload = await this.call<ComputeJobResult>(
           'GET',
@@ -357,8 +365,9 @@ export class ComputeExecutionProvider implements ExecutionProvider {
                 payload.result.error.message ?? 'Compute reported a failure.',
             };
         }
-      } catch (error) {
-        if (!this.notFound(error)) throw error;
+      } catch {
+        // Intentionally swallowed — see above. The result is fetched again, and
+        // surfaced, by `ExecutionReconciler.collectEvidence`.
       }
     }
     return report;

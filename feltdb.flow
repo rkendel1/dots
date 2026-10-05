@@ -132,6 +132,32 @@ app OpenDots {
     seq: integer
   }
 
+  // The control plane's own record of what a human may need to look at.
+  //
+  // One row per *condition*, not per event: the id is derived from the condition's
+  // identity (kind + source), so repeated evaluation addresses the same row and a
+  // durable outage cannot manufacture a new item every cycle. Nothing about an
+  // execution is copied here — `sourceId` is a reference, and context is resolved
+  // at read time from the execution, task and run that still exist.
+  collection attention {
+    id: text
+    kind: enum(execution_failed, execution_blocked, execution_evidence_pending, provider_unreachable, human_decision_required)
+    severity: enum(info, warning, critical)
+    status: enum(open, acknowledged, resolved)
+    title: text
+    summary: text
+    sourceType: enum(execution, task, provider)
+    sourceId: text
+    createdAt: datetime
+    updatedAt: datetime
+    acknowledgedAt: datetime?
+    resolvedAt: datetime?
+    // When the underlying condition stopped being true, which is not the same
+    // thing as a human resolving the item. Kept apart so "this stopped being a
+    // problem" and "a person dealt with it" remain distinguishable forever.
+    conditionClearedAt: datetime?
+  }
+
   collection memories {
     id: text
     text: text

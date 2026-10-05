@@ -40,6 +40,7 @@ import { ResultPane } from './ResultPane';
 import { TaskRow } from './TaskPresentation';
 import { TaskActions } from './TaskActions';
 import { ExecutionPanel } from './ExecutionPanel';
+import { AttentionPanel } from './AttentionPanel';
 import { WorkspaceDialog, type Dialog } from './WorkspaceDialog';
 
 export function App() {
@@ -153,11 +154,16 @@ export function App() {
       clearInterval(timer);
     };
   }, [selectedThread]);
-  const loadExecutions = useCallback(async (taskId: string) => {
+  const loadExecutions = useCallback(async (taskId?: string) => {
     try {
       setExecutions(
         await api<{ executions: Execution[]; provider: string | null }>(
-          `/executions?taskId=${encodeURIComponent(taskId)}`,
+          // No taskId lists every execution, which is what the attention panel
+          // needs after an action: an item it just resolved may belong to a task
+          // that is not currently selected.
+          taskId
+            ? `/executions?taskId=${encodeURIComponent(taskId)}`
+            : '/executions',
         ),
       );
     } catch {
@@ -822,6 +828,11 @@ export function App() {
                       />
                     ))}
                 </div>
+                {/* The attention panel heads the Tasks view rather than sitting in
+                    the sidebar: it answers "what needs me right now", which is a
+                    different question from "what exists", and burying it would put
+                    the answer one click away from the thing it refers to. */}
+                <AttentionPanel onChanged={() => void loadExecutions()} />
                 {!state.tasks.length && (
                   <div className="large-empty">
                     <Clock3 size={32} />

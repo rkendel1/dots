@@ -78,9 +78,41 @@ function errorMessage(error: unknown): string {
     : 'The execution provider could not be reached.';
 }
 
+/**
+ * Whether an error means "the evidence is not sealed yet" rather than "something
+ * went wrong".
+ *
+ * The two must not be conflated. A provider that has finished but has not
+ * published a result is behaving correctly and will publish one shortly;
+ * recording that as a reconciliation error would make ordinary latency look like
+ * an outage, and would trip the provider-unreachable attention rule on a perfectly
+ * healthy node.
+ */
+function isPendingEvidence(error: unknown): boolean {
+  return (
+    error instanceof ExecutionProviderError &&
+    (error.code === 'receipt_unavailable' ||
+      error.code === 'result_not_published')
+  );
+}
+
 export interface ReconcilerOptions {
   /** How often to reconcile, in milliseconds. */
   intervalMs?: number;
+  /**
+   * Run after every cycle, once execution state has settled.
+   *
+   * This is how attention gets generated. There is deliberately no second
+   * polling loop: the reconciler already discovers authoritative changes from
+   * FeltDB every cycle, and a separate loop would either duplicate that work or
+   * disagree with it about what is true. Passing `undefined` disables attention
+   * entirely, which is how a deployment with no provider still runs.
+   *
+   * A throw here is swallowed and reported through {@link onCycleError}: a
+   * control-plane failure must never stop execution reconciliation, or a broken
+   * attention rule could freeze real work.
+   */
+  onCycleComplete?: (input: { executions: Execution[] }) => Promise<unknown>;
   /** Reported when a cycle throws, so failures are visible without a logger. */
   onCycleError?: (error: unknown) => void;
 }
@@ -124,34 +156,61 @@ export class ExecutionReconciler {
 
   private async cycle(): Promise<ReconcileSummary> {
     const summary = emptySummary();
-    if (!this.provider) return summary;
-    try {
-      // The work list is re-derived from durable state every cycle. Nothing here
-      // remembers an execution between passes.
-      for (const execution of await this.store.active()) {
-        summary.considered++;
-        try {
-          await this.reconcileOne(execution);
-        } catch (error) {
-          // One execution must never abort the cycle; the rest still deserve a
-          // chance to be brought into agreement.
-          summary.unreachable++;
-          this.options.onCycleError?.(error);
+    // Not an early return: with no provider there is nothing to reconcile, but
+    // tasks still reach states that need a human, and attention must be derived
+    // from every durable record rather than only the ones Compute produced.
+    if (this.provider) {
+      try {
+        // The work list is re-derived from durable state every cycle. Nothing here
+        // remembers an execution between passes.
+        for (const execution of await this.store.active()) {
+          summary.considered++;
+          try {
+            await this.reconcileOne(execution);
+          } catch (error) {
+            // One execution must never abort the cycle; the rest still deserve a
+            // chance to be brought into agreement.
+            summary.unreachable++;
+            this.options.onCycleError?.(error);
+          }
         }
-      }
-      for (const execution of await this.store.pendingRetrievals()) {
-        try {
-          if (await this.collectEvidence(execution)) summary.retrieved++;
-        } catch (error) {
-          this.options.onCycleError?.(error);
+        for (const execution of await this.store.pendingRetrievals()) {
+          try {
+            if (await this.collectEvidence(execution)) summary.retrieved++;
+          } catch (error) {
+            this.options.onCycleError?.(error);
+          }
         }
+      } catch (error) {
+        this.options.onCycleError?.(error);
+      } finally {
+        this.lastCycleAt = Date.now();
       }
-    } catch (error) {
-      this.options.onCycleError?.(error);
-    } finally {
+    } else {
       this.lastCycleAt = Date.now();
     }
+    // Attention is evaluated from the state this cycle *settled*, not from what it
+    // was asked about, so a half-finished pass never generates an item for a
+    // condition that has already cleared.
+    await this.evaluateAttention();
     return summary;
+  }
+
+  /**
+   * Let the control plane interpret the state this cycle produced.
+   *
+   * Reads the execution list again rather than reusing the loop's, so what is
+   * evaluated is exactly what a later API read would see.
+   */
+  private async evaluateAttention(): Promise<void> {
+    if (!this.options.onCycleComplete) return;
+    try {
+      await this.options.onCycleComplete({
+        executions: await this.store.list(),
+      });
+    } catch (error) {
+      this.options.onCycleError?.(error);
+    }
   }
 
   /**
@@ -366,10 +425,15 @@ export class ExecutionReconciler {
         patch.resultRetrieved = true;
         retrieved = true;
       } catch (error) {
-        // The outcome is already recorded and will not change; a result that has
-        // not arrived yet is a pending retrieval, not an execution failure.
-        patch.reconciliationErrorCode = errorCode(error);
-        patch.reconciliationError = errorMessage(error);
+        // The outcome is already recorded and will not change, so a result that has
+        // not arrived is *pending evidence*, not a failure to observe. Recorded the
+        // same way an unsealed receipt is: visible, retryable, and explicitly not
+        // an error — which is what stops ordinary latency from looking like an
+        // outage and tripping the provider-unreachable rule on a healthy node.
+        if (!isPendingEvidence(error)) {
+          patch.reconciliationErrorCode = errorCode(error);
+          patch.reconciliationError = errorMessage(error);
+        }
       }
     }
 

@@ -1,3 +1,4 @@
+import { attentionRoutes } from './attention-routes.js';
 import { computerRoutes } from './computer-routes.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -9,6 +10,7 @@ import { configured, type Config } from './research.js';
 import type { Platform } from './platform.js';
 import { VoiceService } from './voice.js';
 import { workspaceRoutes } from './workspace-routes.js';
+import type { AttentionStore } from './attention.js';
 import type { ExecutionService } from './execution-service.js';
 import type { ExecutionReconciler } from './execution-reconciler.js';
 import { executionRoutes } from './execution-routes.js';
@@ -34,6 +36,14 @@ export interface AppOptions {
    * with no execution provider at all.
    */
   reconciler?: ExecutionReconciler;
+  /**
+   * The control-plane attention store.
+   *
+   * Optional because attention needs somewhere durable to write, and the tests
+   * that exercise other domains should not be made to construct one. When it is
+   * absent the `/api/attention` routes are simply not mounted.
+   */
+  attention?: AttentionStore;
 }
 export function createApp({
   store,
@@ -44,6 +54,7 @@ export function createApp({
   platform,
   executions,
   reconciler,
+  attention,
 }: AppOptions) {
   const app = new Hono();
   app.use(
@@ -94,6 +105,16 @@ export function createApp({
   });
   if (platform) app.route('/api', computerRoutes(platform.computers));
   if (executions) app.route('/api', executionRoutes(executions, reconciler));
+  if (attention && executions)
+    // Context needs both stores to walk Work → Task → Execution live, so the
+    // routes are mounted only when the execution plane is present.
+    app.route(
+      '/api',
+      attentionRoutes(attention, {
+        executions: executions.executions,
+        tasks: store,
+      }),
+    );
   const voice = platform ? new VoiceService(platform) : undefined;
   if (platform && voice) app.route('/api', workspaceRoutes(platform, voice));
   app.get('/api/state', async (c) =>

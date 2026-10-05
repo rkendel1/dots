@@ -42,7 +42,8 @@ inside it is the execution plane's business.
 
 ## What `executions` is, and why it is not `runs`
 
-`feltdb.flow` now declares 19 collections. The new one is `executions`.
+`feltdb.flow` declares 20 collections. Two were added for execution control and
+attention: `executions` and `attention`.
 
 It is deliberately **not** a duplicate of the existing `runs` collection:
 
@@ -253,6 +254,71 @@ There is deliberately **no** `PATCH /api/executions/:id`. Execution status is no
 client-writable: it changes only as a result of what the provider reports, so the
 UI cannot put an execution into a state the provider never entered.
 
+## Attention — the control plane's own layer
+
+Reconciliation makes execution state agree with Compute. Attention answers the
+next question: _what does a human need to know or decide right now?_
+
+```
+ExecutionReconciler ──▶ durable execution state
+                             │
+                             ▼
+                      AttentionEvaluator        the judgement
+                             │
+                             ▼
+                      AttentionStore            durable, in FeltDB
+                             │
+                    ┌────────┴────────┐
+                    ▼                 ▼
+              /api/attention    /context (read live)
+```
+
+### Identity is the deduplication mechanism
+
+An item's id is `attentionIdFor(kind, sourceType, sourceId)` — a hash of _what
+the condition is about_. Evaluating the same condition a thousand times therefore
+addresses one record, and convergence is a property of the key rather than of a
+check-then-write that could race. No random UUID appears anywhere in the
+deduplication path, and the write is create-only, so a cycle running every few
+seconds cannot reset `createdAt` or overwrite a human's decision.
+
+The same shape as `executionIdFor`, for the same reason.
+
+### Two clocks, not one
+
+| Field                | Set by     | Means                                       |
+| -------------------- | ---------- | ------------------------------------------- |
+| `conditionClearedAt` | the system | the condition stopped being true            |
+| `resolvedAt`         | a person   | someone decided this no longer needs anyone |
+
+Conflating them would let a provider recovering from an outage masquerade as a
+human having dealt with it. An item whose condition has cleared leaves the
+"needs attention" list while staying `open` until someone resolves it — and a
+**failed execution never auto-resolves at all**, because reaching a terminal state
+is not the same as being dealt with.
+
+### Context is resolved, never stored
+
+`GET /api/attention/:id/context` walks Attention → Work → Task → Execution →
+Compute job → Result/Receipt on every request. An item holds a reference
+(`sourceType`, `sourceId`) and nothing else about its source, so a control-plane
+view cannot report an execution as `running` after it finished. A link that no
+longer exists is reported as `sourceMissing` rather than omitted.
+
+### One trigger, no second loop
+
+Attention is evaluated from `ExecutionReconciler`'s `onCycleComplete`, after the
+cycle's state has settled. A separate poller would either duplicate the
+reconciliation work or disagree with it about what is true, and a control-plane
+failure is reported without stopping execution reconciliation.
+
+### Deliberately not added
+
+No retry, no edit, no provider change, no prompt edit, no cancel action. The API
+exposes exactly two mutations — acknowledge and resolve — and cannot create, edit
+or invent an item. No WebSockets, queues, push, email or SMS: the UI reads
+durable state through the existing API.
+
 ## Testing
 
 | Suite                                     | Proves                                                                 |
@@ -261,11 +327,21 @@ UI cannot put an execution into a state the provider never entered.
 | `tests/execution-api.test.ts`             | `API → domain → FeltDB`                                                |
 | `tests/compute-provider-contract.test.ts` | the routes, headers, vocabulary and error shapes of `compute.remote@1` |
 | `tests/execution-ui.test.tsx`             | the panel renders what the API returned                                |
+| `tests/attention.test.ts`                 | conditions, dedup, outage, recovery, ack/resolve, restart              |
+| `tests/attention-api.test.ts`             | the two actions over HTTP, filters, live context, staleness            |
+| `tests/attention-ui.test.tsx`             | acknowledged ≠ resolved ≠ condition-cleared, in the markup             |
+| `tests/attention-integration.test.ts`     | the real path, end to end, on the real Compute adapter                 |
 
 The Compute contract tests stub the **transport**, not the protocol: every request
 the adapter makes is asserted for its exact method, path and headers, and every
 response is a literal shaped like the real one. No Compute instance is started
 and none is required.
+
+`tests/attention-integration.test.ts` drives the whole chain — Work → Task →
+`ComputeExecutionProvider` → `ExecutionReconciler` → `AttentionEvaluator` →
+FeltDB → API — with no scripted provider. Its transport answers **only** the
+routes Compute declares, so an invented endpoint fails loudly rather than
+quietly passing.
 
 `ScriptedExecutionProvider` (`tests/helpers/`) is **test infrastructure only**.
 Its provider name is `scripted-test`, so a scripted execution is visibly

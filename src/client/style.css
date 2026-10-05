@@ -4080,3 +4080,155 @@ h3 {
 .execution .quiet-button {
   margin-top: 10px;
 }
+
+/* ── Attention ────────────────────────────────────────────────────────────
+ * Severity is carried by a left border rather than colour alone, so the
+ * distinction survives greyscale and does not rely on telling red from amber.
+ * Informational items are deliberately quieter than critical ones: a list where
+ * everything shouts is a list people learn to stop reading.
+ */
+.attention-panel {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.attention-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.attention-panel-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.attention-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--line);
+  font-size: 11px;
+}
+
+.attention-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.attention-item {
+  border: 1px solid rgba(180, 210, 200, 0.16);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: rgba(180, 210, 200, 0.04);
+}
+
+.attention-item.critical {
+  border-left-color: #d97a6c;
+}
+
+.attention-item.warning {
+  border-left-color: #d9b56c;
+}
+
+.attention-item.info {
+  border-left-color: rgba(180, 210, 200, 0.4);
+}
+
+.attention-item.selected {
+  border-color: rgba(180, 210, 200, 0.4);
+}
+
+.attention-open {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  background: none;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.attention-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.attention-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.attention-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.attention-badge.cleared {
+  opacity: 0.85;
+}
+
+.attention-summary {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.attention-actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 12px 10px;
+}
+
+.attention-context {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.attention-context h4 {
+  margin: 0 0 8px;
+}
+
+.attention-context dl {
+  display: grid;
+  grid-template-columns: minmax(120px, auto) 1fr;
+  gap: 4px 12px;
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.attention-run {
+  display: block;
+}
+
+.attention-settled {
+  margin-top: 12px;
+}
+
+.attention-settled summary {
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.7;
+}

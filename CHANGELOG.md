@@ -10,6 +10,42 @@ the product.
 
 ### Added
 
+- **Attention — the control plane's own view of what matters.** A durable
+  `attention` collection joins `feltdb.flow` (**20 collections**). An item is a
+  condition, not an event: its id is derived from
+  `(kind, sourceType, sourceId)`, so repeated reconciliation addresses the same
+  record and a provider outage spanning many cycles is one item rather than one
+  per cycle. Five kinds — `execution_failed`, `execution_blocked`,
+  `execution_evidence_pending`, `provider_unreachable` and
+  `human_decision_required` — with a lifecycle of `open` → `acknowledged` →
+  `resolved`, where acknowledging is deliberately _not_ resolving.
+- **`conditionClearedAt`, kept apart from `resolvedAt`.** A provider that comes
+  back stops being a problem without anyone having decided anything, so the
+  condition clearing is recorded as its own observation. A failed execution never
+  auto-resolves: reaching a terminal state is not the same as being dealt with.
+- **Live context.** `GET /api/attention/:id/context` walks
+  Attention → Work → Task → Execution → Compute job → Result/Receipt _at read
+  time_. Nothing about an execution is copied onto an item, so a control-plane
+  view cannot go stale.
+- **Attention in the UI** — a "Needs attention" panel that separates what needs a
+  human from current state, with exactly two actions: acknowledge and resolve.
+  There is no retry, no edit, no way to change a provider or a prompt.
+- **Evaluation rides the existing reconciliation loop.** `ExecutionReconciler`
+  gained an `onCycleComplete` hook; there is no second polling loop and no second
+  durable state system. A control-plane failure is reported without stopping
+  execution reconciliation.
+
+### Changed
+
+- **Evidence availability no longer blocks a lifecycle transition.** Compute
+  reports a result or receipt that has not been sealed yet as a provider error;
+  `ComputeExecutionProvider` now reports the status regardless and leaves the
+  missing payload to the separate retrieval path. Previously an unsealed result
+  could pin a finished execution in `running` indefinitely.
+- **A pending result is pending evidence, not a reconciliation error**, exactly as
+  an unsealed receipt already was — so ordinary provider latency cannot trip the
+  `provider_unreachable` rule on a healthy node.
+
 - **`feltdb.flow`** — the authoritative application contract. Declares the
   `OpenDots` identity and all **18 runtime collections** with their real fields
   and `ref` relationships. Validated by the pinned FeltDB CLI
@@ -66,7 +102,7 @@ the product.
 ### Added
 
 - **OpenDots can now control real Compute executions.** A durable `executions`
-  collection joins `feltdb.flow` (19 collections), an `ExecutionProvider`
+  collection joins `feltdb.flow` (20 collections), an `ExecutionProvider`
   boundary isolates external work, and `ComputeExecutionProvider` speaks Compute's
   real `compute.remote@1` protocol — `POST /compute/jobs` for submission,
   `GET /compute/jobs/{id}` for status, `/result` for output, `/cancel` to stop.

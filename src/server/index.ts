@@ -1,3 +1,5 @@
+import { AttentionStore } from './attention.js';
+import { AttentionEvaluator } from './attention-evaluator.js';
 import { createShutdown } from './shutdown.js';
 import { join } from 'node:path';
 import { reportChannelFailure, safeFailure } from './slack-channel.js';
@@ -40,13 +42,29 @@ const executions = new ExecutionService(
   new ExecutionStore(state.db),
   computeProviderFromEnv(),
 );
+// The attention control plane. It reads the same durable records as everything
+// else and writes its own interpretation of them — never a copy of an execution.
+const attention = new AttentionStore(state.db);
+const attentionEvaluator = new AttentionEvaluator(attention);
 // The reconciliation loop. It discovers its work from FeltDB on every cycle, so
 // this line is where "survives a restart" actually happens rather than being
 // assumed: the first cycle after startup re-derives the whole outstanding list.
 const reconciler = new ExecutionReconciler(
   new ExecutionStore(state.db),
   computeProviderFromEnv(),
-  { intervalMs: reconcileIntervalFromEnv() },
+  {
+    intervalMs: reconcileIntervalFromEnv(),
+    // Attention is derived from the state each cycle settles, not polled for on
+    // its own schedule. This is the single place execution truth becomes control
+    // plane interpretation, and it is why a restarted process rebuilds its
+    // attention view with no memory of its own.
+    onCycleComplete: async ({ executions }) => {
+      await attentionEvaluator.evaluate({
+        executions,
+        tasks: await store.tasks(),
+      });
+    },
+  },
 );
 // Reconcile anything a previous process left in flight *before* the listener
 // binds, so a restarted OpenDots never serves a stale view of a live execution.
@@ -123,6 +141,7 @@ const app = createApp({
   platform,
   executions,
   reconciler,
+  attention,
 });
 app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');

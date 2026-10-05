@@ -187,16 +187,26 @@ export class ScriptedExecutionProvider implements ExecutionProvider {
     throw new ExecutionProviderError(this.name, code, message);
   }
 
+  /**
+   * Serve the published result, or refuse the way a provider with nothing
+   * published yet must.
+   *
+   * Returning `null` here would be the double of fabricating evidence: the
+   * reconciler would record `resultRetrieved: true` for a result nobody produced,
+   * and any evidence-pending attention would clear on a lie. So an absent result
+   * is an error, exactly as it is in the real adapter.
+   */
   async result(execution: ExecutionHandle): Promise<unknown> {
     this.guardOnline();
     const entry = this.executions.get(execution.providerExecutionId);
-    if (!entry || this.options.resultNotPublished)
+    const published = entry?.result ?? this.options.result;
+    if (!entry || this.options.resultNotPublished || published === undefined)
       throw new ExecutionProviderError(
         this.name,
-        'unknown_job',
-        `The scripted provider has no result for ${execution.providerExecutionId}.`,
+        'result_not_published',
+        `The scripted provider has not published a result for ${execution.providerExecutionId}.`,
       );
-    return entry.result ?? this.options.result ?? null;
+    return published;
   }
 
   /**
