@@ -307,6 +307,133 @@ export interface SetupStatus {
   slack: string;
   missing: string[];
 }
+
+// Configuration types for the Setup UI
+
+/** Secret status metadata: whether configured and where from. */
+export interface SecretStatus {
+  configured: boolean;
+  source?: 'environment' | 'secret-reference'; // future sources
+}
+
+/** Configuration field with optional value and secret status. */
+export interface ConfigurationField<T = string> {
+  configured: boolean;
+  value?: T;
+  secret?: SecretStatus;
+  error?: string;
+}
+
+/** Intelligence configuration domain model. */
+export interface IntelligenceConfiguration {
+  apiUrl?: string;
+  wsUrl?: string;
+  apiKey: SecretStatus;
+  model?: string;
+  baseUrl?: string;
+}
+
+/** Browser configuration domain model. */
+export interface BrowserConfiguration {
+  url?: string;
+  host?: string;
+  port?: number;
+  secret: SecretStatus;
+}
+
+/** Voice configuration domain model. */
+export interface VoiceConfiguration {
+  model?: string;
+  name?: string;
+  apiKey: SecretStatus;
+}
+
+/** Slack configuration domain model. */
+export interface SlackConfiguration {
+  channelName?: string;
+  teamId?: string;
+  userIds: string[];
+  dotId?: string;
+}
+
+/** Computer configuration domain model. */
+export interface ComputerConfiguration {
+  supervisorToken: SecretStatus;
+  token: SecretStatus;
+  namespace?: string;
+  memoryBytes?: number;
+  runtime?: string;
+  engineSocket?: string;
+}
+
+/** Core configuration domain model. */
+export interface CoreConfiguration {
+  ownerId?: string;
+  appOrigin?: string;
+  ownerToken: SecretStatus;
+}
+
+/** Complete configuration read model. */
+export interface ConfigurationReadModel {
+  setupComplete: boolean;
+  sections: {
+    core: CoreConfiguration;
+    intelligence: IntelligenceConfiguration;
+    browser: BrowserConfiguration;
+    voice: VoiceConfiguration;
+    slack: SlackConfiguration;
+    computers: ComputerConfiguration;
+  };
+  requirements: ConfigurationRequirement[];
+}
+
+/** Configuration requirement for setup completion. */
+export interface ConfigurationRequirement {
+  id: string;
+  section: 'core' | 'intelligence' | 'browser' | 'voice' | 'slack' | 'computers';
+  label: string;
+  required: boolean;
+  configured: boolean;
+  valid: boolean;
+  source: 'environment' | 'managed' | 'missing';
+}
+
+/** Non-secret configuration that can be persisted. */
+export interface ManagedConfiguration {
+  id: string;
+  ownerId: string;
+  intelligence?: {
+    apiUrl?: string;
+    wsUrl?: string;
+    model?: string;
+    baseUrl?: string;
+  };
+  browser?: {
+    url?: string;
+    host?: string;
+    port?: number;
+  };
+  voice?: {
+    model?: string;
+    name?: string;
+  };
+  slack?: {
+    channelName?: string;
+    teamId?: string;
+    userIds?: string[];
+    dotId?: string;
+  };
+  computers?: {
+    namespace?: string;
+    memoryBytes?: number;
+    runtime?: string;
+    engineSocket?: string;
+  };
+  appOrigin?: string;
+  savedAt: number;
+  updatedAt: number;
+}
+
 export interface WorkspaceState {
   spaces: Space[];
   dots: Dot[];

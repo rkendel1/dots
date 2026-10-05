@@ -42,6 +42,7 @@ import { TaskActions } from './TaskActions';
 import { ExecutionPanel } from './ExecutionPanel';
 import { AttentionPanel } from './AttentionPanel';
 import { WorkspaceDialog, type Dialog } from './WorkspaceDialog';
+import { SetupDialog } from './SetupDialog';
 
 export function App() {
   const [state, setState] = useState<State>();
@@ -112,6 +113,7 @@ export function App() {
     executions: Execution[];
     provider: string | null;
   }>();
+  const [showSetupDialog, setShowSetupDialog] = useState(false);
   const refresh = useCallback(async () => {
     try {
       const [s, w] = await Promise.all([
@@ -196,6 +198,13 @@ export function App() {
     (item) => item.id === selectedThread && item.dotId === dot?.id,
   );
   const configured = !!workspace && workspace.setup.missing.length === 0;
+
+  // Show setup dialog on first load if not configured
+  useEffect(() => {
+    if (workspace && !configured && !showSetupDialog) {
+      setShowSetupDialog(true);
+    }
+  }, [workspace?.setup.missing.length, configured, showSetupDialog]);
   const chooseDot = (next: Dot) => {
     setSelectedDot(next.id);
     setSelectedThread(
@@ -968,11 +977,22 @@ export function App() {
       )}
     </div>
   );
-  return configured ? (
-    <CopilotKitProvider runtimeUrl="/api/copilotkit" headers={authHeaders()}>
-      {content}
-    </CopilotKitProvider>
-  ) : (
-    content
+  return (
+    <>
+      {configured ? (
+        <CopilotKitProvider runtimeUrl="/api/copilotkit" headers={authHeaders()}>
+          {content}
+        </CopilotKitProvider>
+      ) : (
+        content
+      )}
+      <SetupDialog
+        isOpen={showSetupDialog && !configured}
+        onComplete={() => {
+          setShowSetupDialog(false);
+          void refresh();
+        }}
+      />
+    </>
   );
 }

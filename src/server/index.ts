@@ -23,6 +23,7 @@ import { createApp } from './app.js';
 import { WorkspaceStore } from './workspace.js';
 import { Platform } from './platform.js';
 import type { PlatformConfig } from './platform-config.js';
+import { ConfigurationService } from './configuration.js';
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 4310);
 const ownerToken = process.env.OWNER_TOKEN;
@@ -117,6 +118,7 @@ const config: PlatformConfig = {
   ownerToken,
 };
 const platform = await Platform.create(store, workspace, config);
+const configService = new ConfigurationService(state.db, workspace.ownerId);
 const researchConfig = {
   mode: 'live' as const,
   apiKey: config.apiKey,
@@ -160,6 +162,8 @@ const app = createApp({
   applicator: decisionApplicator,
   ownerId: workspace.ownerId,
   proposals,
+  configService,
+  platformConfig: config,
 });
 app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
