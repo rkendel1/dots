@@ -2,6 +2,7 @@ import { AttentionStore } from './attention.js';
 import { AttentionEvaluator } from './attention-evaluator.js';
 import { DecisionStore } from './decisions.js';
 import { DecisionApplicator } from './decision-applicator.js';
+import { DecisionProposalStore } from './decision-proposals.js';
 import { createShutdown } from './shutdown.js';
 import { join } from 'node:path';
 import { reportChannelFailure, safeFailure } from './slack-channel.js';
@@ -57,6 +58,8 @@ const decisionApplicator = new DecisionApplicator(
   decisions,
   attention,
 );
+// Durable agent decision proposals — suggestions about attention items without authority.
+const proposals = new DecisionProposalStore(state.db, attention);
 // The reconciliation loop. It discovers its work from FeltDB on every cycle, so
 // this line is where "survives a restart" actually happens rather than being
 // assumed: the first cycle after startup re-derives the whole outstanding list.
@@ -156,6 +159,7 @@ const app = createApp({
   decisions,
   applicator: decisionApplicator,
   ownerId: workspace.ownerId,
+  proposals,
 });
 app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
