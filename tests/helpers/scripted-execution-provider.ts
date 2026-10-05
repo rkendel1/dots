@@ -42,9 +42,28 @@ interface ScriptedExecution {
   error?: { code?: string; message: string };
 }
 
+/**
+ * The set of jobs a scripted "Compute node" knows about.
+ *
+ * Exported so a test can model one node across several provider instances, which
+ * is what a restart or a brief outage actually looks like: the node keeps its
+ * jobs, and OpenDots is the side that lost its memory.
+ */
+export type ScriptedJobTable = Map<string, ScriptedExecution>;
+
 export interface ScriptedExecutionProviderOptions {
   /** Provider statuses to return, in the order they are polled. */
   script?: string[];
+  /**
+   * Share one job table across instances.
+   *
+   * Models "the same Compute node, seen again" — a restart, or a provider that
+   * was briefly unreachable and is now back. Without this, a freshly constructed
+   * provider would report `unknown_job` for work a previous instance accepted,
+   * which is exactly what a real node never does. Each instance keeps its own
+   * script; only the record of *which jobs exist* is shared.
+   */
+  sharedTable?: ScriptedJobTable;
   /** Result attached when the script reaches a terminal status. */
   result?: unknown;
   /** Failure attached when the script reaches a terminal status. */
@@ -57,6 +76,19 @@ export interface ScriptedExecutionProviderOptions {
   unavailable?: boolean;
   /** Omit `cancel`, to test a provider that cannot stop work. */
   cannotCancel?: boolean;
+  /**
+   * Throw from every read as though the provider were unreachable.
+   *
+   * This is the outage double: the execution's real state is untouched, which is
+   * exactly what a reconciliation pass must not be able to overwrite.
+   */
+  offline?: { code?: string; message?: string } | boolean;
+  /** A receipt to serve. Omit to serve none at all. */
+  receiptPayload?: unknown;
+  /** Serve a receipt that is not published yet, as Compute does. */
+  receiptNotPublished?: boolean;
+  /** Withhold the result, as a provider that has not published it yet would. */
+  resultNotPublished?: boolean;
 }
 
 export class ScriptedExecutionProvider implements ExecutionProvider {
@@ -66,13 +98,13 @@ export class ScriptedExecutionProvider implements ExecutionProvider {
   readonly cancelled: string[] = [];
   readonly idempotencyKeys: string[] = [];
 
-  private readonly executions = new Map<string, ScriptedExecution>();
+  private readonly executions: ScriptedJobTable;
   private cursor = 0;
   private sequence = 0;
 
-  constructor(
-    private readonly options: ScriptedExecutionProviderOptions = {},
-  ) {}
+  constructor(private readonly options: ScriptedExecutionProviderOptions = {}) {
+    this.executions = options.sharedTable ?? new Map();
+  }
 
   async ready(): Promise<boolean> {
     return !this.options.unavailable;
@@ -108,6 +140,7 @@ export class ScriptedExecutionProvider implements ExecutionProvider {
   }
 
   async getStatus(execution: ExecutionHandle): Promise<ExecutionStatusReport> {
+    this.guardOnline();
     const entry = this.executions.get(execution.providerExecutionId);
     if (!entry || this.options.forget)
       throw new ExecutionProviderError(
@@ -136,6 +169,55 @@ export class ScriptedExecutionProvider implements ExecutionProvider {
       ...(entry.result !== undefined ? { result: entry.result } : {}),
       ...(entry.error ? { error: entry.error } : {}),
     };
+  }
+
+  /**
+   * Refuse every read while `offline`, with the provider's own failure shape.
+   *
+   * Deliberately not `unknown_job`: an outage must be distinguishable from the
+   * provider answering "no such job", because reconciliation treats them
+   * completely differently.
+   */
+  private guardOnline(): void {
+    if (!this.options.offline) return;
+    const {
+      code = 'transport_failure',
+      message = 'The scripted provider is unreachable.',
+    } = this.options.offline === true ? {} : this.options.offline;
+    throw new ExecutionProviderError(this.name, code, message);
+  }
+
+  async result(execution: ExecutionHandle): Promise<unknown> {
+    this.guardOnline();
+    const entry = this.executions.get(execution.providerExecutionId);
+    if (!entry || this.options.resultNotPublished)
+      throw new ExecutionProviderError(
+        this.name,
+        'unknown_job',
+        `The scripted provider has no result for ${execution.providerExecutionId}.`,
+      );
+    return entry.result ?? this.options.result ?? null;
+  }
+
+  /**
+   * Serve a receipt, or refuse the way Compute does when one is not sealed yet.
+   *
+   * The "not published" case uses the same `receipt_unavailable` code the real
+   * adapter produces, so reconciliation is exercised against the code it will
+   * actually see in production rather than a test-only invention.
+   */
+  async receipt(_execution: ExecutionHandle): Promise<unknown> {
+    this.guardOnline();
+    if (
+      this.options.receiptNotPublished ||
+      this.options.receiptPayload === undefined
+    )
+      throw new ExecutionProviderError(
+        this.name,
+        'receipt_unavailable',
+        'The scripted provider has not published a receipt yet.',
+      );
+    return this.options.receiptPayload;
   }
 
   async cancel(execution: ExecutionHandle): Promise<void> {

@@ -1,6 +1,12 @@
 export function createShutdown(options: {
   /** Awaitable because `Runner.stop()` requeues its claims in durable state. */
   stopRunner: () => void | Promise<void>;
+  /**
+   * Awaitable because it waits for any reconciliation cycle in flight to finish
+   * before the durable state is closed. Optional: not every server has a
+   * reconciler.
+   */
+  stopReconciler?: () => void | Promise<void>;
   stopPlatform: () => Promise<void>;
   closeServer: () => Promise<void>;
   /**
@@ -41,6 +47,12 @@ export function createShutdown(options: {
       };
       await Promise.race([
         Promise.all([
+          // The reconciler stops first among the concurrent teardowns: a cycle
+          // still writing to durable state when it closes would fail a commit for
+          // no reason. It is awaited so shutdown never races a live cycle.
+          settle('Stopping execution reconciler failed', async () =>
+            options.stopReconciler?.(),
+          ),
           settle('Stopping Channels failed', options.stopPlatform),
           settle('Closing HTTP server failed', options.closeServer),
         ]),

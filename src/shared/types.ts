@@ -62,10 +62,39 @@ export interface Execution {
   createdAt: number;
   startedAt: number | null;
   completedAt: number | null;
-  /** Whatever the provider returned, in its own shape. Never synthesized. */
+  /** Whatever the provider returned, in the provider's own shape. Never synthesized. */
   result: unknown | null;
   errorCode: string | null;
   error: string | null;
+
+  /* ── Reconciliation ──────────────────────────────────────────────────
+   * Everything below is OpenDots' own view of how well it agrees with the
+   * provider. It is durable, because the answer must survive a restart: after a
+   * restart there is no memory of the last cycle, and a UI that claimed
+   * "reconciled recently" from process state would be lying.
+   */
+
+  /** When OpenDots last successfully observed this execution from the provider. */
+  lastReconciledAt: number | null;
+  /**
+   * Whether the provider's result payload has actually been retrieved.
+   *
+   * Distinct from `result !== null`: a terminal execution whose result has not
+   * been fetched yet is `completed` with nothing to show, and conflating that
+   * with "the provider returned nothing" would hide a pending retrieval.
+   */
+  resultRetrieved: boolean;
+  /**
+   * The provider's verifiable receipt, stored verbatim in the provider's own
+   * shape. OpenDots deliberately does not model receipt fields: it cannot know
+   * them better than Compute does, and re-typing them would make an incompatible
+   * Compute change look compatible.
+   */
+  receipt: unknown | null;
+  /** The provider's error kind from the last *failed* reconciliation, if any. */
+  reconciliationErrorCode: string | null;
+  /** Why the last reconciliation attempt failed, if it did. */
+  reconciliationError: string | null;
 }
 
 export interface Source {

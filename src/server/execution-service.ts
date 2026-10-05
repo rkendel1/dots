@@ -16,14 +16,14 @@
  *    execution finished because it restarted. It asks the provider, and only
  *    applies what the provider says.
  *
- * The service deliberately does not poll on a timer of its own. Recovery and
- * explicit refreshes are driven by the caller, so OpenDots introduces no
- * background infrastructure the Compute contract does not require.
+ * The service deliberately does not poll. Reconciliation is
+ * {@link ExecutionReconciler}'s job, because bringing OpenDots' view back into
+ * agreement with the provider is a separate concern from asking for work: it has
+ * its own schedule, its own failure semantics, and its own state.
  */
 import type { Execution } from '../shared/types.js';
 import {
   ExecutionProviderError,
-  normalizeExecutionStatus,
   type ExecutionHandle,
   type ExecutionProvider,
 } from './execution-provider.js';
@@ -124,13 +124,24 @@ export class ExecutionService {
         input: { prompt: starting.prompt },
       });
     } catch (error) {
+      // A definitive refusal is the provider answering, and retrying will not
+      // change it. A transport failure is not: the provider was never asked, so
+      // the execution is left `starting` with the failure recorded, and the
+      // reconciler finishes the submission when the provider returns.
+      const definitive =
+        error instanceof ExecutionProviderError &&
+        error.code !== 'transport_failure';
+      if (definitive)
+        return (
+          (await this.store.transition(starting.id, 'failed', {
+            errorCode: error.code,
+            error: error.message,
+          })) ?? starting
+        );
       return (
-        (await this.store.transition(starting.id, 'failed', {
-          errorCode:
-            error instanceof ExecutionProviderError
-              ? error.code
-              : 'transport_failure',
-          error:
+        (await this.store.annotate(starting.id, {
+          reconciliationErrorCode: 'transport_failure',
+          reconciliationError:
             error instanceof Error
               ? error.message
               : 'The execution provider could not be reached.',
@@ -141,111 +152,9 @@ export class ExecutionService {
       (await this.store.transition(starting.id, 'running', {
         providerExecutionId: handle.providerExecutionId,
         providerSessionId: handle.providerSessionId ?? null,
+        lastReconciledAt: Date.now(),
       })) ?? starting
     );
-  }
-
-  /**
-   * Ask the provider what became of an execution and record the answer.
-   *
-   * The provider's word is normalized here, in the service, rather than inside
-   * the provider, so that the table that maps one vocabulary onto another stays
-   * auditable in one place.
-   *
-   * An execution the provider has never heard of is *not* assumed finished. It
-   * is recorded as failed with the provider's own `unknown_job` code, because the
-   * execution OpenDots believes in does not exist — and silently leaving it
-   * `running` forever would be the worse lie.
-   */
-  async reconcile(execution: Execution): Promise<Execution> {
-    if (!this.provider) return execution;
-    if (isTerminal(execution.status)) return execution;
-    if (!execution.providerExecutionId) {
-      // Queued or starting, but the provider never gave us an identity. Either a
-      // submission failed, or a previous process died between the two writes.
-      if (execution.status === 'queued')
-        return (await this.submit(execution)) ?? execution;
-      return execution;
-    }
-    let report;
-    try {
-      report = await this.provider.getStatus({
-        providerExecutionId: execution.providerExecutionId,
-        ...(execution.providerSessionId
-          ? { providerSessionId: execution.providerSessionId }
-          : {}),
-      });
-    } catch (error) {
-      if (
-        error instanceof ExecutionProviderError &&
-        error.code === 'unknown_job'
-      )
-        return (
-          (await this.store.transition(execution.id, 'failed', {
-            providerStatus: execution.providerStatus,
-            errorCode: 'unknown_job',
-            error: error.message,
-          })) ?? execution
-        );
-      // A transport failure says nothing about the execution's real state, so
-      // nothing is written. Leaving it as it was is the honest outcome: a later
-      // reconcile will try again.
-      throw error;
-    }
-    const status = normalizeExecutionStatus(
-      report.providerStatus,
-      report.terminal,
-    );
-    // Polling an execution that has not moved must not be an error. When the
-    // normalized status is unchanged the observation is still worth keeping — the
-    // provider's exact word is part of the durable record — but the lifecycle
-    // does not move, so it goes through `annotate` rather than `transition`.
-    if (status === execution.status)
-      return (
-        (await this.store.annotate(execution.id, {
-          providerStatus: report.providerStatus,
-          ...(report.providerSessionId !== undefined
-            ? { providerSessionId: report.providerSessionId }
-            : {}),
-        })) ?? execution
-      );
-    return (
-      (await this.store.transition(execution.id, status, {
-        providerStatus: report.providerStatus,
-        ...(report.providerSessionId !== undefined
-          ? { providerSessionId: report.providerSessionId }
-          : {}),
-        ...(status === 'completed' ? { result: report.result ?? null } : {}),
-        ...(status === 'failed' || status === 'cancelled'
-          ? {
-              errorCode: report.error?.code ?? report.providerStatus,
-              error: report.error?.message ?? null,
-            }
-          : {}),
-      })) ?? execution
-    );
-  }
-
-  /**
-   * Reconcile every execution that has not finished.
-   *
-   * Called on startup, this is what makes an execution survive a restart: the
-   * record is durable, and its real outcome is read back from the provider rather
-   * than guessed from the fact that this is a new process.
-   */
-  async recover(): Promise<Execution[]> {
-    const active = await this.store.active();
-    const settled: Execution[] = [];
-    for (const execution of active) {
-      try {
-        settled.push(await this.reconcile(execution));
-      } catch {
-        // The provider is unreachable. The execution stays exactly as recorded,
-        // so the next reconcile — or the next restart — tries again.
-        settled.push(execution);
-      }
-    }
-    return settled;
   }
 
   /**

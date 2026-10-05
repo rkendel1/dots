@@ -364,6 +364,38 @@ export class ComputeExecutionProvider implements ExecutionProvider {
     return report;
   }
 
+  /**
+   * Read the result payload from `GET /compute/jobs/{id}/result`.
+   *
+   * Returns Compute's `JobResult.result` — the `ExecutionResult` — verbatim. The
+   * OpenDots record already carries the provider job id, and re-modelling
+   * Compute's result schema would only create a second place for it to drift.
+   *
+   * A job with no result yet is answered by Compute with `unknown_job` or
+   * `job_expired`; both are propagated unchanged so the caller can tell "no result
+   * yet" from "this node is unreachable".
+   */
+  async result(execution: ExecutionHandle): Promise<unknown> {
+    const id = execution.providerExecutionId;
+    if (!JOB_ID.test(id))
+      throw new ExecutionProviderError(
+        this.name,
+        'unknown_job',
+        `Refusing to read a result for a malformed job identity: ${id}`,
+      );
+    const payload = await this.call<ComputeJobResult>(
+      'GET',
+      `/compute/jobs/${id}/result`,
+    );
+    if (!payload.result)
+      throw new ExecutionProviderError(
+        this.name,
+        'unknown_job',
+        `Compute has not published a result for ${id} yet.`,
+      );
+    return payload.result;
+  }
+
   async cancel(execution: ExecutionHandle): Promise<void> {
     const id = execution.providerExecutionId;
     if (!JOB_ID.test(id))
@@ -373,6 +405,48 @@ export class ComputeExecutionProvider implements ExecutionProvider {
         `Refusing to cancel a malformed job identity: ${id}`,
       );
     await this.call('POST', `/compute/jobs/${id}/cancel`);
+  }
+
+  /**
+   * Read the execution receipt from `GET /compute/jobs/{id}/receipt`.
+   *
+   * The envelope Compute returns is `JobReceipt { job_id, receipt }`. It is
+   * stored whole, so the job id travels with the evidence and a receipt can be
+   * correlated to the execution that produced it without trusting the field
+   * OpenDots happens to have recorded.
+   *
+   * **A contract nuance this has to respect.** Compute reports a receipt that
+   * does not exist *yet* as `ProviderErrorKind::RemoteExecutionFailure` with the
+   * message "job receipt is not available" — there is no distinct "not ready"
+   * kind. So this method re-labels that one case as `receipt_unavailable`, and
+   * leaves every other error exactly as Compute reported it. Without that, a
+   * receipt that had not been sealed yet would be indistinguishable from a
+   * genuinely broken one, and reconciliation would either retry forever or give
+   * up on evidence that was simply early.
+   */
+  async receipt(execution: ExecutionHandle): Promise<unknown> {
+    const id = execution.providerExecutionId;
+    if (!JOB_ID.test(id))
+      throw new ExecutionProviderError(
+        this.name,
+        'unknown_job',
+        `Refusing to read a receipt for a malformed job identity: ${id}`,
+      );
+    try {
+      return await this.call('GET', `/compute/jobs/${id}/receipt`);
+    } catch (error) {
+      if (
+        error instanceof ExecutionProviderError &&
+        error.code === 'remote_execution_failure' &&
+        /receipt is not available/i.test(error.message)
+      )
+        throw new ExecutionProviderError(
+          this.name,
+          'receipt_unavailable',
+          'Compute has not published a receipt for this execution yet.',
+        );
+      throw error;
+    }
   }
 }
 

@@ -9,6 +9,10 @@ import { findClientRoot } from './runtime-scope.js';
 import { ExecutionStore } from './executions.js';
 import { ExecutionService } from './execution-service.js';
 import { computeProviderFromEnv } from './compute-execution-provider.js';
+import {
+  ExecutionReconciler,
+  reconcileIntervalFromEnv,
+} from './execution-reconciler.js';
 import { Runner } from './runner.js';
 import { createApp } from './app.js';
 import { WorkspaceStore } from './workspace.js';
@@ -36,9 +40,17 @@ const executions = new ExecutionService(
   new ExecutionStore(state.db),
   computeProviderFromEnv(),
 );
+// The reconciliation loop. It discovers its work from FeltDB on every cycle, so
+// this line is where "survives a restart" actually happens rather than being
+// assumed: the first cycle after startup re-derives the whole outstanding list.
+const reconciler = new ExecutionReconciler(
+  new ExecutionStore(state.db),
+  computeProviderFromEnv(),
+  { intervalMs: reconcileIntervalFromEnv() },
+);
 // Reconcile anything a previous process left in flight *before* the listener
 // binds, so a restarted OpenDots never serves a stale view of a live execution.
-await executions.recover();
+await reconciler.reconcileAll();
 const workspace = new WorkspaceStore(
   process.env.OWNER_ID ?? 'opendots-owner',
   state.db,
@@ -110,6 +122,7 @@ const app = createApp({
       : undefined),
   platform,
   executions,
+  reconciler,
 });
 app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
@@ -129,6 +142,9 @@ app.get('*', serveStatic({ path: join(clientRoot, 'index.html') }));
 const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
   console.log(`OpenDots template listening on http://${host}:${info.port}`);
   runner.start();
+  // Reconciliation starts only after the listener is up, so the startup cycle
+  // above is the one bound by the "nothing stale on first request" guarantee.
+  reconciler.start();
   void platform
     .start()
     .catch((error) =>
@@ -140,6 +156,7 @@ const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
 });
 const shutdown = createShutdown({
   stopRunner: () => runner.stop(),
+  stopReconciler: () => reconciler.stop(),
   stopPlatform: () => platform.stop(),
   closeServer: () =>
     new Promise<void>((resolve, reject) =>

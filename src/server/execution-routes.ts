@@ -11,14 +11,22 @@
  *   `POST /executions`        request one; carries the idempotency key
  *   `GET  /executions/:id`    read one, reconciled against the provider
  *   `POST /executions/:id/cancel`  ask the provider to stop it
+ *   `POST /executions/reconcile`   reconcile every outstanding execution now
  *
  * There is deliberately no `PATCH /executions/:id`. Execution status is not
  * client-writable: it only ever changes as a result of what the provider reports,
  * so a UI cannot put an execution into a state the provider never entered.
+ *
+ * Reconciliation state is exposed on the execution itself rather than as a
+ * separate endpoint, because it is a property of that execution: when it was last
+ * observed, whether its result and receipt have actually arrived, and whether the
+ * provider could be reached. A UI can therefore say "running — provider
+ * temporarily unreachable" without inferring anything.
  */
 import { Hono } from 'hono';
 import { z } from 'zod';
 import type { ExecutionService } from './execution-service.js';
+import type { ExecutionReconciler } from './execution-reconciler.js';
 import { ExecutionProviderError } from './execution-provider.js';
 import { InvalidExecutionTransition } from './executions.js';
 
@@ -39,7 +47,10 @@ const idempotencyKey = z
     { message: 'An idempotency key cannot contain control characters.' },
   );
 
-export function executionRoutes(service: ExecutionService): Hono {
+export function executionRoutes(
+  service: ExecutionService,
+  reconciler?: ExecutionReconciler,
+): Hono {
   const app = new Hono();
 
   app.get('/executions', async (c) =>
@@ -101,16 +112,38 @@ export function executionRoutes(service: ExecutionService): Hono {
   app.get('/executions/:id', async (c) => {
     const stored = await service.executions.get(c.req.param('id'));
     if (!stored) return c.json({ error: 'Execution not found.' }, 404);
-    if (!service.configured) return c.json({ execution: stored });
+    if (!reconciler) return c.json({ execution: stored });
     try {
-      // Reading an execution refreshes it from the provider, so what the UI shows
-      // is the provider's answer rather than a snapshot that may be stale.
-      return c.json({ execution: await service.reconcile(stored) });
+      // Reading an execution reconciles it, so what the UI shows is the provider's
+      // answer rather than a snapshot that may be stale.
+      return c.json({ execution: await reconciler.reconcileOne(stored) });
     } catch {
       // The provider is unreachable. The durable record is still correct and
-      // still returned, rather than the read failing entirely.
+      // still returned — including any recorded reconciliation error — rather than
+      // the read failing entirely.
       return c.json({ execution: stored });
     }
+  });
+
+  /**
+   * Reconcile every outstanding execution immediately.
+   *
+   * Useful when the user can see an execution is stale, or that the provider has
+   * come back, and does not want to wait for the next scheduled cycle. It runs the
+   * same cycle the scheduler runs, so a manual trigger and a scheduled one cannot
+   * disagree about what reconciliation means.
+   */
+  app.post('/executions/reconcile', async (c) => {
+    if (!reconciler?.configured)
+      return c.json(
+        {
+          error:
+            'No execution provider is configured. Set COMPUTE_ENDPOINT to a Compute node serving compute.remote@1.',
+        },
+        503,
+      );
+    const summary = await reconciler.reconcileAll();
+    return c.json({ summary, lastRunAt: reconciler.lastRunAt });
   });
 
   app.post('/executions/:id/cancel', async (c) => {

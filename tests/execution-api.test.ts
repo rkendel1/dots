@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { openFeltState } from '../src/server/felt/state.js';
 import { ExecutionStore } from '../src/server/executions.js';
 import { ExecutionService } from '../src/server/execution-service.js';
+import { ExecutionReconciler } from '../src/server/execution-reconciler.js';
 import { executionRoutes } from '../src/server/execution-routes.js';
 import { ScriptedExecutionProvider } from './helpers/scripted-execution-provider.js';
 
@@ -26,8 +27,11 @@ function fixture(provider?: ScriptedExecutionProvider) {
   cleanup.push(() => state.close());
   const executions = new ExecutionStore(state.db);
   const service = new ExecutionService(executions, provider);
-  const app = new Hono().route('/api', executionRoutes(service));
-  return { executions, service, app, provider };
+  // The reconciler is what a read consults, so the API is tested with one
+  // attached — the same shape the server builds.
+  const reconciler = new ExecutionReconciler(executions, provider);
+  const app = new Hono().route('/api', executionRoutes(service, reconciler));
+  return { executions, service, reconciler, app, provider };
 }
 
 function post(body: unknown, method = 'POST') {
@@ -172,6 +176,64 @@ describe('execution API', () => {
     expect(
       (await create(app, { prompt: '   ', idempotencyKey: key() })).status,
     ).toBe(400);
+  });
+
+  it('exposes reconciliation state so the UI need not infer it', async () => {
+    // §11: a user must be able to tell "running" from "running — provider
+    // temporarily unreachable", and "completed" from "completed — result pending".
+    // Every field here is read from the durable record; none is computed here.
+    const provider = new ScriptedExecutionProvider({ script: ['running'] });
+    const { app } = fixture(provider);
+    const created = (await (
+      await create(app, { prompt: 'go', idempotencyKey: key() })
+    ).json()) as { execution: { id: string } };
+
+    const healthy = (await (
+      await app.request(`/api/executions/${created.execution.id}`)
+    ).json()) as { execution: Record<string, unknown> };
+    expect(healthy.execution.status).toBe('running');
+    expect(healthy.execution.lastReconciledAt).toBeGreaterThan(0);
+    expect(healthy.execution.reconciliationError).toBeNull();
+    expect(healthy.execution.resultRetrieved).toBe(false);
+    expect(healthy.execution.receipt).toBeNull();
+
+    // Now take the provider away and read again.
+    const offline = fixture(new ScriptedExecutionProvider({ offline: true }));
+    const createdOffline = (await (
+      await create(offline.app, { prompt: 'go', idempotencyKey: key() })
+    ).json()) as { execution: { id: string } };
+    const degraded = (await (
+      await offline.app.request(
+        `/api/executions/${createdOffline.execution.id}`,
+      )
+    ).json()) as { execution: Record<string, unknown> };
+    expect(degraded.execution.status).toBe('running');
+    expect(degraded.execution.reconciliationError).toMatch(/unreachable/);
+    expect(degraded.execution.reconciliationErrorCode).toBe(
+      'transport_failure',
+    );
+    // The UI can now say "provider temporarily unreachable" from the response.
+    expect(provider.started).toHaveLength(1);
+  });
+
+  it('reconciles on demand and reports what the cycle did', async () => {
+    const provider = new ScriptedExecutionProvider({ script: ['running'] });
+    const { app } = fixture(provider);
+    await create(app, { prompt: 'go', idempotencyKey: key() });
+    const response = await app.request('/api/executions/reconcile', post({}));
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      summary: { considered: number };
+      lastRunAt: number;
+    };
+    expect(body.summary.considered).toBe(1);
+    expect(body.lastRunAt).toBeGreaterThan(0);
+  });
+
+  it('refuses a manual reconcile with no provider, rather than pretending', async () => {
+    const { app } = fixture();
+    const response = await app.request('/api/executions/reconcile', post({}));
+    expect(response.status).toBe(503);
   });
 
   it('offers no way to set an execution status directly', async () => {

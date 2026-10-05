@@ -20,6 +20,11 @@ const base: Execution = {
   result: null,
   errorCode: null,
   error: null,
+  lastReconciledAt: null,
+  resultRetrieved: false,
+  receipt: null,
+  reconciliationErrorCode: null,
+  reconciliationError: null,
 };
 
 /**

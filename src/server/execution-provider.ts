@@ -105,8 +105,41 @@ export interface ExecutionProvider {
    */
   getStatus(execution: ExecutionHandle): Promise<ExecutionStatusReport>;
 
+  /**
+   * Ask the provider for the result payload of a settled execution.
+   *
+   * Distinct from {@link ExecutionProvider.getStatus} because the two answer
+   * different questions and are needed at different times: the status is read
+   * while an execution is in flight, the result only once it has finished. Keeping
+   * them separate is what lets a result that failed to download be retried later
+   * without re-deciding a lifecycle that is already settled.
+   *
+   * A provider that has not published a result yet should throw
+   * {@link ExecutionProviderError}; returning an empty payload would be a
+   * fabricated result.
+   */
+  result(execution: ExecutionHandle): Promise<unknown>;
+
   /** Ask the provider to stop an execution, if it supports stopping. */
   cancel?(execution: ExecutionHandle): Promise<void>;
+
+  /**
+   * Ask the provider for the verifiable evidence of an execution.
+   *
+   * Optional because not every provider produces evidence, and because — as with
+   * a result — it only exists once the execution has finished.
+   *
+   * The payload is returned **verbatim**, in the provider's own shape. OpenDots
+   * does not model receipt fields: re-typing them would let an incompatible
+   * provider change pass typechecking, which is precisely the failure a receipt
+   * exists to prevent.
+   *
+   * A provider that has no receipt *yet* should throw
+   * {@link ExecutionProviderError} rather than returning a placeholder. Callers
+   * must treat "no receipt yet" as "ask again later", never as an execution
+   * failure.
+   */
+  receipt?(execution: ExecutionHandle): Promise<unknown>;
 
   /**
    * Whether this provider can run work at all right now.

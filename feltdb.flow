@@ -117,6 +117,11 @@ app OpenDots {
     result: json?
     errorCode: text?
     error: text?
+    lastReconciledAt: datetime?
+    resultRetrieved: boolean
+    receipt: json?
+    reconciliationErrorCode: text?
+    reconciliationError: text?
   }
 
   collection task_events {

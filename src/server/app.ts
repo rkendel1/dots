@@ -10,6 +10,7 @@ import type { Platform } from './platform.js';
 import { VoiceService } from './voice.js';
 import { workspaceRoutes } from './workspace-routes.js';
 import type { ExecutionService } from './execution-service.js';
+import type { ExecutionReconciler } from './execution-reconciler.js';
 import { executionRoutes } from './execution-routes.js';
 const interval = z.number().int().min(60).max(31_536_000).nullable();
 export interface AppOptions {
@@ -26,6 +27,13 @@ export interface AppOptions {
    * all — Compute is released separately, and its absence is not an error.
    */
   executions?: ExecutionService;
+  /**
+   * The reconciliation loop.
+   *
+   * Optional for the same reason `executions` is: OpenDots must be fully usable
+   * with no execution provider at all.
+   */
+  reconciler?: ExecutionReconciler;
 }
 export function createApp({
   store,
@@ -35,6 +43,7 @@ export function createApp({
   origin,
   platform,
   executions,
+  reconciler,
 }: AppOptions) {
   const app = new Hono();
   app.use(
@@ -84,7 +93,7 @@ export function createApp({
     await next();
   });
   if (platform) app.route('/api', computerRoutes(platform.computers));
-  if (executions) app.route('/api', executionRoutes(executions));
+  if (executions) app.route('/api', executionRoutes(executions, reconciler));
   const voice = platform ? new VoiceService(platform) : undefined;
   if (platform && voice) app.route('/api', workspaceRoutes(platform, voice));
   app.get('/api/state', async (c) =>

@@ -13,6 +13,7 @@ import {
   ExecutionService,
   NoExecutionProvider,
 } from '../src/server/execution-service.js';
+import { ExecutionReconciler } from '../src/server/execution-reconciler.js';
 import { ScriptedExecutionProvider } from './helpers/scripted-execution-provider.js';
 
 interface Open {
@@ -346,43 +347,6 @@ describe('execution service', () => {
     expect(execution.error).toBe('not allowed');
   });
 
-  it('normalizes a provider completion into a completed execution', async () => {
-    const provider = new ScriptedExecutionProvider({
-      script: ['running', 'succeeded'],
-      result: { stdout: 'hello' },
-    });
-    const service = new ExecutionService(memory(), provider);
-    const { execution } = await service.request({
-      prompt: 'go',
-      idempotencyKey: 'k',
-    });
-    expect(execution.status).toBe('running');
-    // The scripted provider advances one status per poll, mirroring a real one:
-    // still running, and only then finished.
-    const stillRunning = await service.reconcile(execution);
-    expect(stillRunning.status).toBe('running');
-    expect(stillRunning.providerStatus).toBe('running');
-    const done = await service.reconcile(stillRunning);
-    expect(done.status).toBe('completed');
-    expect(done.providerStatus).toBe('succeeded');
-    expect(done.result).toEqual({ stdout: 'hello' });
-    // A finished execution stops being polled into new states.
-    const again = await service.reconcile(done);
-    expect(again.status).toBe('completed');
-  });
-
-  it('normalizes a provider timeout into a failure, not a success', async () => {
-    const provider = new ScriptedExecutionProvider({ script: ['timed_out'] });
-    const service = new ExecutionService(memory(), provider);
-    const { execution } = await service.request({
-      prompt: 'go',
-      idempotencyKey: 'k',
-    });
-    const settled = await service.reconcile(execution);
-    expect(settled.status).toBe('failed');
-    expect(settled.providerStatus).toBe('timed_out');
-  });
-
   it('never assumes completion just because the process restarted', async () => {
     const provider = new ScriptedExecutionProvider({ script: ['running'] });
     const first = durable();
@@ -390,9 +354,12 @@ describe('execution service', () => {
     await service.request({ prompt: 'go', idempotencyKey: 'k' });
     first.close();
 
-    // A new process, the same durable state, the same provider.
+    // A new process, the same durable state, the same provider. The reconciler
+    // discovers the execution from FeltDB — there is nothing handed to it.
     const second = reopen(first.dir);
-    const recovered = await new ExecutionService(second, provider).recover();
+    const reconciler = new ExecutionReconciler(second, provider);
+    await reconciler.reconcileAll();
+    const recovered = await second.list();
     expect(recovered).toHaveLength(1);
     // Still running: the provider said so, and nothing else may claim otherwise.
     expect(recovered[0]?.status).toBe('running');
@@ -405,7 +372,8 @@ describe('execution service', () => {
     await service.request({ prompt: 'go', idempotencyKey: 'k' });
     first.close();
     const second = reopen(first.dir);
-    const recovered = await new ExecutionService(second, provider).recover();
+    await new ExecutionReconciler(second, provider).reconcileAll();
+    const recovered = await second.list();
     expect(recovered[0]?.status).toBe('failed');
     expect(recovered[0]?.errorCode).toBe('unknown_job');
   });

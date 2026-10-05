@@ -29,6 +29,7 @@ import {
   isLostRace,
   toExecution,
   transactionId,
+  withoutStorageFields,
   type ExecutionCollections,
   type ExecutionRecord,
 } from './execution-collections.js';
@@ -62,6 +63,102 @@ export const EXECUTION_TRANSITIONS: Readonly<
 
 export function isTerminal(status: ExecutionStatus): boolean {
   return EXECUTION_TRANSITIONS[status].length === 0;
+}
+
+/**
+ * How long after settling OpenDots keeps asking for a missing receipt.
+ *
+ * Compute seals a receipt when it finishes sealing an execution, which is not
+ * the same instant the job status becomes terminal. So a short gap is normal and
+ * worth retrying. But retrying forever would mean one HTTP request per cycle per
+ * historical execution, for an execution that will never produce one — a plain
+ * session execution, say, or anything the provider does not evidence.
+ *
+ * The window is a scheduling bound, not durable state: it is derived from the
+ * already-durable `completedAt`, so a restart resumes the same decision rather
+ * than resetting it.
+ */
+export const RECEIPT_GRACE_MS = 15 * 60_000;
+
+function withinReceiptGrace(
+  record: { completedAt?: number | null },
+  now: number,
+): boolean {
+  if (!record.completedAt) return false;
+  return now - record.completedAt <= RECEIPT_GRACE_MS;
+}
+
+/**
+ * What a reconciliation pass can write.
+ *
+ * Shared by `transition` and `annotate` so that a lifecycle move and an
+ * observation-only refresh cannot drift apart in what they are able to record.
+ * Every field is optional and absent means "leave as it was" — which is what
+ * makes the two operations safe to retry.
+ */
+export interface ExecutionObservation {
+  providerExecutionId?: string | null;
+  providerSessionId?: string | null;
+  providerStatus?: string | null;
+  result?: unknown;
+  errorCode?: string | null;
+  error?: string | null;
+  /** When the provider was last successfully observed. */
+  lastReconciledAt?: number | null;
+  /** Whether the result payload was actually retrieved from the provider. */
+  resultRetrieved?: boolean;
+  /** The provider's receipt, stored verbatim. */
+  receipt?: unknown;
+  /** The provider's error kind from a failed reconciliation attempt. */
+  reconciliationErrorCode?: string | null;
+  /** Why the last reconciliation attempt failed. */
+  reconciliationError?: string | null;
+}
+
+/**
+ * Overlay an observation onto a stored record.
+ *
+ * `undefined` means "not observed this time" and leaves the field alone, which
+ * is what lets a repeated pass be idempotent rather than blanking fields it did
+ * not re-read.
+ */
+export function applyObservation(
+  record: ExecutionRecord,
+  patch: ExecutionObservation,
+): Execution {
+  const pick = <K extends keyof ExecutionObservation>(
+    key: K,
+    fallback: Execution[K & keyof Execution],
+  ): Execution[K & keyof Execution] => {
+    const value = patch[key];
+    return value === undefined
+      ? fallback
+      : (value as Execution[K & keyof Execution]);
+  };
+  return {
+    ...withoutStorageFields(record),
+    id: record.id,
+    providerExecutionId: pick(
+      'providerExecutionId',
+      record.providerExecutionId,
+    ),
+    providerSessionId: pick('providerSessionId', record.providerSessionId),
+    providerStatus: pick('providerStatus', record.providerStatus),
+    result: pick('result', record.result),
+    errorCode: pick('errorCode', record.errorCode),
+    error: pick('error', record.error),
+    lastReconciledAt: pick('lastReconciledAt', record.lastReconciledAt),
+    resultRetrieved: pick('resultRetrieved', record.resultRetrieved ?? false),
+    receipt: pick('receipt', record.receipt ?? null),
+    reconciliationErrorCode: pick(
+      'reconciliationErrorCode',
+      record.reconciliationErrorCode,
+    ),
+    reconciliationError: pick(
+      'reconciliationError',
+      record.reconciliationError,
+    ),
+  };
 }
 
 export class InvalidExecutionTransition extends Error {
@@ -201,6 +298,11 @@ export class ExecutionStore {
       result: null,
       errorCode: null,
       error: null,
+      lastReconciledAt: null,
+      resultRetrieved: false,
+      receipt: null,
+      reconciliationErrorCode: null,
+      reconciliationError: null,
     };
     try {
       await this.commit('execution-create', (tx) =>
@@ -222,6 +324,23 @@ export class ExecutionStore {
   }
 
   /**
+   * Every execution whose provider evidence is not fully collected yet.
+   *
+   * Discovered from durable state, not from memory, which is what lets a result
+   * that failed to download be picked up by a later cycle — or by a later
+   * process — without anyone remembering that it was outstanding.
+   */
+  async pendingRetrievals(now = Date.now()): Promise<Execution[]> {
+    const rows = await this.felt.executions.all();
+    return rows
+      .filter((row) => isTerminal(row.status))
+      .filter((row) => !row.resultRetrieved || !row.receipt)
+      .filter((row) => withinReceiptGrace(row, now))
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map(toExecution);
+  }
+
+  /**
    * Move an execution to a new lifecycle state.
    *
    * The transition is validated before anything is written, the write is fenced
@@ -236,15 +355,7 @@ export class ExecutionStore {
   async transition(
     id: string,
     to: ExecutionStatus,
-    patch: {
-      providerExecutionId?: string | null;
-      providerSessionId?: string | null;
-      providerStatus?: string | null;
-      result?: unknown;
-      errorCode?: string | null;
-      error?: string | null;
-      now?: number;
-    } = {},
+    patch: ExecutionObservation & { now?: number } = {},
   ): Promise<Execution | undefined> {
     const now = patch.now ?? Date.now();
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -256,27 +367,12 @@ export class ExecutionStore {
       const version = record.__version ?? 1;
       const next: Execution = {
         ...toExecution(record),
+        ...applyObservation(record, patch),
         status: to,
         startedAt:
           record.startedAt ??
           (to === 'starting' || to === 'running' ? now : null),
         completedAt: isTerminal(to) ? now : record.completedAt,
-        providerExecutionId:
-          patch.providerExecutionId !== undefined
-            ? patch.providerExecutionId
-            : record.providerExecutionId,
-        providerSessionId:
-          patch.providerSessionId !== undefined
-            ? patch.providerSessionId
-            : record.providerSessionId,
-        providerStatus:
-          patch.providerStatus !== undefined
-            ? patch.providerStatus
-            : record.providerStatus,
-        result: patch.result !== undefined ? patch.result : record.result,
-        errorCode:
-          patch.errorCode !== undefined ? patch.errorCode : record.errorCode,
-        error: patch.error !== undefined ? patch.error : record.error,
       };
       try {
         await this.commit('execution-transition', (tx) =>
@@ -308,38 +404,66 @@ export class ExecutionStore {
    * observation.
    *
    * The lifecycle is untouched, so this cannot complete, fail or cancel anything.
+   *
+   * A terminal execution is refused. That is what stops a stale reconciliation —
+   * one that read the record before another pass finished it — from writing an
+   * outdated observation over a settled outcome. Use {@link recordEvidence} for
+   * evidence that legitimately arrives after an execution settled.
    */
   async annotate(
     id: string,
-    patch: {
-      providerExecutionId?: string | null;
-      providerSessionId?: string | null;
-      providerStatus?: string | null;
-      result?: unknown;
-    },
+    patch: ExecutionObservation,
+  ): Promise<Execution | undefined> {
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const record = await this.felt.executions.get(id);
+      if (!record) return undefined;
+      if (isTerminal(record.status)) return undefined;
+      const version = record.__version ?? 1;
+      const next = applyObservation(record, patch);
+      try {
+        await this.commit('execution-annotate', (tx) =>
+          tx
+            .collection<ExecutionRecord>('executions')
+            .set(
+              id,
+              { ...next, __version: version + 1 },
+              { expectedVersion: version },
+            ),
+        );
+        return next;
+      } catch (error) {
+        if (isLostRace(error)) continue;
+        throw error;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Record provider evidence against an execution whose lifecycle is settled.
+   *
+   * The one write path that may touch a terminal execution, and it deliberately
+   * cannot move the lifecycle: `status`, `startedAt` and `completedAt` are not in
+   * the patch type, so there is no version of this call that reopens or re-decides
+   * a finished execution.
+   *
+   * This exists because `annotate` refuses terminal records — the right default
+   * for a stale pass racing a completion — but a result or receipt legitimately
+   * arrives *after* the execution settled, and has to land somewhere.
+   */
+  async recordEvidence(
+    id: string,
+    patch: ExecutionObservation,
   ): Promise<Execution | undefined> {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const record = await this.felt.executions.get(id);
       if (!record) return undefined;
       const version = record.__version ?? 1;
-      const next: Execution = {
-        ...toExecution(record),
-        providerExecutionId:
-          patch.providerExecutionId !== undefined
-            ? patch.providerExecutionId
-            : record.providerExecutionId,
-        providerSessionId:
-          patch.providerSessionId !== undefined
-            ? patch.providerSessionId
-            : record.providerSessionId,
-        providerStatus:
-          patch.providerStatus !== undefined
-            ? patch.providerStatus
-            : record.providerStatus,
-        result: patch.result !== undefined ? patch.result : record.result,
-      };
+      // Only evidence may change: the lifecycle fields are carried through from
+      // the stored record untouched.
+      const next = applyObservation(record, patch);
       try {
-        await this.commit('execution-annotate', (tx) =>
+        await this.commit('execution-evidence', (tx) =>
           tx
             .collection<ExecutionRecord>('executions')
             .set(
