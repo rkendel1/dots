@@ -2,7 +2,6 @@ import { openPageLink } from './page-navigation';
 import { SpaceNav } from './SpaceNav';
 import { SpaceWorkspace } from './SpaceWorkspace';
 import { useCallback, useEffect, useState, useRef } from 'react';
-import { CopilotKitProvider } from '@copilotkit/react-core/v2';
 import {
   ArrowUp,
   ArrowUpRight,
@@ -20,6 +19,7 @@ import {
   Plus,
   Search,
   Settings2,
+  Sliders,
   Trash2,
   X,
 } from 'lucide-react';
@@ -32,7 +32,7 @@ import type {
   State,
   WorkspaceState,
 } from '../shared/types';
-import { api, ApiError, authHeaders, setToken } from './api';
+import { api, ApiError, setToken } from './api';
 import { Mascot } from './Mascot';
 import { Chat } from './Chat';
 import { ThreadList } from './ThreadList';
@@ -336,6 +336,13 @@ export function App() {
           onClick={() => setDialog({ type: 'settings' })}
         >
           <Settings2 size={18} />
+        </button>
+        <button
+          className="rail-settings"
+          aria-label="Configure infrastructure"
+          onClick={() => setShowSetupDialog(true)}
+        >
+          <Sliders size={18} />
         </button>
       </nav>
       <button
@@ -979,15 +986,9 @@ export function App() {
   );
   return (
     <>
-      {configured ? (
-        <CopilotKitProvider runtimeUrl="/api/copilotkit" headers={authHeaders()}>
-          {content}
-        </CopilotKitProvider>
-      ) : (
-        content
-      )}
+      {content}
       <SetupDialog
-        isOpen={showSetupDialog && !configured}
+        isOpen={showSetupDialog}
         onComplete={() => {
           setShowSetupDialog(false);
           void refresh();
