@@ -1,5 +1,6 @@
 import { AttentionStore } from './attention.js';
 import { AttentionEvaluator } from './attention-evaluator.js';
+import { DecisionStore } from './decisions.js';
 import { createShutdown } from './shutdown.js';
 import { join } from 'node:path';
 import { reportChannelFailure, safeFailure } from './slack-channel.js';
@@ -46,6 +47,8 @@ const executions = new ExecutionService(
 // else and writes its own interpretation of them — never a copy of an execution.
 const attention = new AttentionStore(state.db);
 const attentionEvaluator = new AttentionEvaluator(attention);
+// Durable human decisions about attention items.
+const decisions = new DecisionStore(state.db);
 // The reconciliation loop. It discovers its work from FeltDB on every cycle, so
 // this line is where "survives a restart" actually happens rather than being
 // assumed: the first cycle after startup re-derives the whole outstanding list.
@@ -142,6 +145,8 @@ const app = createApp({
   executions,
   reconciler,
   attention,
+  decisions,
+  ownerId: workspace.ownerId,
 });
 app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');

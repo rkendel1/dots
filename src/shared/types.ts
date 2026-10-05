@@ -192,6 +192,20 @@ export interface AttentionContext {
   sourceMissing: boolean;
 }
 
+/** The global decision vocabulary, regardless of attention kind. */
+export type DecisionValue = 'approve' | 'reject' | 'retry' | 'dismiss';
+
+export type DecisionActorType = 'human';
+
+export interface Decision {
+  id: string;
+  attentionId: string;
+  decision: DecisionValue;
+  actorType: DecisionActorType;
+  actorId: string;
+  createdAt: number;
+}
+
 export interface Source {
   title: string;
   url: string;
