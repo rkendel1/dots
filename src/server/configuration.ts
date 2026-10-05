@@ -58,6 +58,17 @@ export class ConfigurationService {
           ownerToken: this.secretStatus(config.ownerToken),
         },
         intelligence: {
+          configured:
+            !!(
+              (config.apiKey && config.model) || config.intelligenceKey
+            ),
+          provider:
+            config.intelligenceProvider === 'openai' ||
+            (!config.intelligenceProvider && config.apiKey && config.model)
+              ? 'openai'
+              : config.intelligenceProvider === 'anthropic'
+                ? 'anthropic'
+                : undefined,
           apiUrl: managed?.intelligence?.apiUrl,
           wsUrl: managed?.intelligence?.wsUrl,
           apiKey: this.secretStatus(config.intelligenceKey),
@@ -107,41 +118,81 @@ export class ConfigurationService {
   /**
    * Get configuration requirements for setup completion.
    * Defines which fields are required vs optional.
+   *
+   * Separates capability requirements (Intelligence) from provider choice (OpenAI, Anthropic, etc).
+   * OpenDots requires an Intelligence capability, not a specific provider.
    */
   private getRequirements(config: PlatformConfig): ConfigurationRequirement[] {
+    // Determine if OpenAI is explicitly selected or auto-detected
+    const isOpenAISelected =
+      config.intelligenceProvider === 'openai' ||
+      (!config.intelligenceProvider && config.apiKey && config.model);
+
+    const isAnthropicSelected = config.intelligenceProvider === 'anthropic';
+
     const requirements: ConfigurationRequirement[] = [
-      // Core requirements
+      // Intelligence capability is required, but no specific provider is
       {
-        id: 'intelligence_api_key',
-        section: 'intelligence',
-        label: 'Intelligence API Key',
+        id: 'intelligence',
+        section: 'intelligence' as const,
+        label: 'Intelligence Provider',
+        required: true,
+        configured:
+          (isOpenAISelected && !!config.apiKey && !!config.model) ||
+          (isAnthropicSelected && !!config.intelligenceKey),
+        valid:
+          (isOpenAISelected && !!config.apiKey && !!config.model) ||
+          (isAnthropicSelected && !!config.intelligenceKey),
+        source:
+          (config.apiKey && config.model) ||
+          config.intelligenceKey
+            ? 'environment'
+            : 'missing',
+      },
+    ];
+
+    // OpenAI is optional; only required if explicitly selected
+    if (isOpenAISelected) {
+      requirements.push(
+        {
+          id: 'openai_api_key',
+          section: 'intelligence' as const,
+          label: 'OpenAI API Key',
+          required: true,
+          configured: !!config.apiKey,
+          valid: !!config.apiKey,
+          source: config.apiKey ? 'environment' : 'missing',
+        },
+        {
+          id: 'openai_model',
+          section: 'intelligence' as const,
+          label: 'OpenAI Model',
+          required: true,
+          configured: !!config.model,
+          valid: !!config.model,
+          source: config.model ? 'environment' : 'missing',
+        },
+      );
+    }
+
+    // Anthropic would be optional; only required if explicitly selected
+    if (isAnthropicSelected) {
+      requirements.push({
+        id: 'anthropic_api_key',
+        section: 'intelligence' as const,
+        label: 'Anthropic API Key',
         required: true,
         configured: !!config.intelligenceKey,
         valid: !!config.intelligenceKey,
         source: config.intelligenceKey ? 'environment' : 'missing',
-      },
-      {
-        id: 'openai_api_key',
-        section: 'intelligence',
-        label: 'OpenAI API Key',
-        required: true,
-        configured: !!config.apiKey,
-        valid: !!config.apiKey,
-        source: config.apiKey ? 'environment' : 'missing',
-      },
-      {
-        id: 'openai_model',
-        section: 'intelligence',
-        label: 'OpenAI Model',
-        required: true,
-        configured: !!config.model,
-        valid: !!config.model,
-        source: config.model ? 'environment' : 'missing',
-      },
-      // Optional integrations
+      });
+    }
+
+    // Optional integrations
+    requirements.push(
       {
         id: 'browser',
-        section: 'browser',
+        section: 'browser' as const,
         label: 'Browser Service',
         required: false,
         configured: !!(config.browserUrl && config.browserSecret),
@@ -151,7 +202,7 @@ export class ConfigurationService {
       },
       {
         id: 'voice',
-        section: 'voice',
+        section: 'voice' as const,
         label: 'Voice Service',
         required: false,
         configured: !!(config.voiceKey && config.voiceModel),
@@ -161,7 +212,7 @@ export class ConfigurationService {
       },
       {
         id: 'slack',
-        section: 'slack',
+        section: 'slack' as const,
         label: 'Slack Integration',
         required: false,
         configured: !!(
@@ -183,7 +234,7 @@ export class ConfigurationService {
       },
       {
         id: 'computers',
-        section: 'computers',
+        section: 'computers' as const,
         label: 'Computer Services',
         required: false,
         configured: !!(
@@ -203,7 +254,7 @@ export class ConfigurationService {
             ? 'environment'
             : 'missing',
       },
-    ];
+    );
 
     return requirements;
   }

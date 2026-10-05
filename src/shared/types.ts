@@ -299,9 +299,17 @@ export interface CallReceipt {
   transcript: string;
   error: string | null;
 }
+/**
+ * Platform readiness status.
+ *
+ * Separates capability requirements from provider choice.
+ * `intelligence` reflects whether an Intelligence capability is available.
+ * `intelligenceProvider` reflects which provider (if any) is selected.
+ * OpenAI is a supported provider but not the platform requirement itself.
+ */
 export interface SetupStatus {
   intelligence: boolean;
-  model: boolean;
+  intelligenceProvider?: 'openai' | 'anthropic' | 'other';
   browser: boolean;
   voice: boolean;
   slack: string;
@@ -326,6 +334,8 @@ export interface ConfigurationField<T = string> {
 
 /** Intelligence configuration domain model. */
 export interface IntelligenceConfiguration {
+  configured: boolean;
+  provider?: 'openai' | 'anthropic' | 'other';
   apiUrl?: string;
   wsUrl?: string;
   apiKey: SecretStatus;

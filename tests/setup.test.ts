@@ -29,15 +29,50 @@ it('never claims Slack online without a complete managed channel declaration', (
     ).slack,
   ).toBe('online');
 });
-it('requires Intelligence and model setup and disables voice when either is absent', () => {
+it('disables voice when Intelligence provider is not configured', () => {
+  // Without any intelligence provider configured
   expect(
     setupStatus({
       ...config,
+      apiKey: '',
+      model: '',
       intelligenceKey: '',
       voiceKey: 'fixture',
       voiceModel: 'fixture',
     }),
-  ).toMatchObject({ missing: ['INTELLIGENCE_API_KEY'], voice: false });
+  ).toMatchObject({ intelligence: false, voice: false });
+});
+
+it('supports provider-agnostic intelligence configuration', () => {
+  // OpenAI provider explicitly configured
+  expect(
+    setupStatus({
+      ...config,
+      intelligenceProvider: 'openai',
+      apiKey: 'sk-...',
+      model: 'gpt-4',
+    }),
+  ).toMatchObject({
+    intelligence: true,
+    intelligenceProvider: 'openai',
+    missing: [],
+  });
+});
+
+it('supports alternative intelligence providers', () => {
+  // Anthropic provider configured
+  expect(
+    setupStatus({
+      ...config,
+      intelligenceProvider: 'anthropic',
+      intelligenceKey: 'claude-...',
+      apiKey: '',
+      model: '',
+    }),
+  ).toMatchObject({
+    intelligence: true,
+    intelligenceProvider: 'anthropic',
+  });
 });
 it('reports activation failure until the SDK recovers online', () => {
   const declared = {
