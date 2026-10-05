@@ -24,7 +24,11 @@ import {
   legalDecisionsFor,
 } from '../src/server/decision-vocabulary.js';
 import { decisionIdFor } from '../src/server/decision-collections.js';
-import type { Attention, AttentionKind } from '../src/shared/types.js';
+import type {
+  Attention,
+  AttentionKind,
+  DecisionValue,
+} from '../src/shared/types.js';
 
 interface Open {
   attention: AttentionStore;
@@ -319,8 +323,8 @@ describe('decisions — immutable human choices about attention', () => {
 
     it('prevents collision between different combination orders', () => {
       // Length-prefixing prevents ('a', 'bc') and ('ab', 'c') from colliding
-      const id1 = decisionIdFor('a', 'bc', 'human', 'owner');
-      const id2 = decisionIdFor('ab', 'c', 'human', 'owner');
+      const id1 = decisionIdFor('a', 'bc' as DecisionValue, 'human', 'owner');
+      const id2 = decisionIdFor('ab', 'c' as DecisionValue, 'human', 'owner');
       expect(id1).not.toBe(id2);
     });
   });

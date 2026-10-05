@@ -15,7 +15,18 @@ import { Bell, BellRing } from 'lucide-react';
 import { api } from './api';
 import { relative } from './TaskPresentation';
 import { AttentionCard, outstanding } from './AttentionCard';
-import type { Attention, AttentionContext } from '../shared/types';
+import type {
+  Attention,
+  AttentionContext,
+  Decision,
+  DecisionValue,
+} from '../shared/types';
+
+interface DecisionsResponse {
+  decisions: Decision[];
+  legalDecisions: DecisionValue[];
+  attention: Attention;
+}
 
 /**
  * Context for the selected item, loaded on demand.
@@ -23,13 +34,25 @@ import type { Attention, AttentionContext } from '../shared/types';
  * Fetched separately from the list rather than embedded in it, because context is
  * resolved live and a list response must never be able to cache it.
  */
-function AttentionContextPane({ id }: { id: string }) {
+function AttentionContextPane({
+  id,
+  onChanged,
+}: {
+  id: string;
+  onChanged?: () => void;
+}) {
   const [context, setContext] = useState<AttentionContext>();
+  const [decisions, setDecisions] = useState<Decision[]>([]);
+  const [legalDecisions, setLegalDecisions] = useState<DecisionValue[]>([]);
   const [error, setError] = useState('');
+  const [decisionError, setDecisionError] = useState('');
+  const [submitting, setSubmitting] = useState('');
 
   useEffect(() => {
     let current = true;
     setContext(undefined);
+    setDecisions([]);
+    setLegalDecisions([]);
     setError('');
     api<{ context: AttentionContext }>(`/attention/${id}/context`)
       .then((body) => current && setContext(body.context))
@@ -38,6 +61,41 @@ function AttentionContextPane({ id }: { id: string }) {
       current = false;
     };
   }, [id]);
+
+  useEffect(() => {
+    let current = true;
+    setDecisions([]);
+    setLegalDecisions([]);
+    setDecisionError('');
+    api<DecisionsResponse>(`/attention/${id}/decisions`)
+      .then((body) => {
+        if (current) {
+          setDecisions(body.decisions);
+          setLegalDecisions(body.legalDecisions);
+        }
+      })
+      .catch((e: Error) => current && setDecisionError(e.message));
+    return () => {
+      current = false;
+    };
+  }, [id]);
+
+  const submitDecision = async (decision: DecisionValue) => {
+    setSubmitting(decision);
+    setDecisionError('');
+    try {
+      await api(`/attention/${id}/decisions`, 'POST', { decision });
+      // Reload decisions from the server to reflect the new state
+      const body = await api<DecisionsResponse>(`/attention/${id}/decisions`);
+      setDecisions(body.decisions);
+      setLegalDecisions(body.legalDecisions);
+      onChanged?.();
+    } catch (e: unknown) {
+      setDecisionError((e as Error).message);
+    } finally {
+      setSubmitting('');
+    }
+  };
 
   if (error) return <p className="chat-error">{error}</p>;
   if (!context) return <p className="muted">Loading context…</p>;
@@ -114,6 +172,47 @@ function AttentionContextPane({ id }: { id: string }) {
             ))}
           </dd>
         </dl>
+      )}
+
+      {legalDecisions.length > 0 && (
+        <div>
+          <h4>Your decisions</h4>
+          {decisions.length > 0 && (
+            <div className="attention-decision-history">
+              <h5>Decision history</h5>
+              <ul className="attention-decision-list">
+                {decisions.map((d) => (
+                  <li key={d.id} className="attention-decision-item">
+                    <span className="attention-decision-value">
+                      {d.decision}
+                    </span>
+                    <span className="attention-decision-actor">
+                      {d.actorId}
+                    </span>
+                    <span className="attention-decision-time">
+                      {new Date(d.createdAt).toLocaleString()}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div className="attention-decision-actions">
+            <h5>What do you decide?</h5>
+            {decisionError && <p className="chat-error">{decisionError}</p>}
+            <div className="attention-action-buttons">
+              {legalDecisions.map((decision) => (
+                <button
+                  key={decision}
+                  onClick={() => void submitDecision(decision)}
+                  disabled={submitting !== ''}
+                >
+                  {submitting === decision ? 'Submitting…' : decision}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -201,7 +300,9 @@ export function AttentionPanel({
             <p className="muted">Nothing needs attention right now.</p>
           )}
           <ul className="attention-list">{open.map(card)}</ul>
-          {selected && <AttentionContextPane id={selected} />}
+          {selected && (
+            <AttentionContextPane id={selected} onChanged={onChanged} />
+          )}
           {settled.length > 0 && (
             <details className="attention-settled">
               <summary>{settled.length} no longer needing attention</summary>

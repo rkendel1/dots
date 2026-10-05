@@ -46,21 +46,22 @@ async function raiseAttention(kind: AttentionKind): Promise<Attention> {
   return item;
 }
 
-async function callApi<T>(
+async function callApi<T = Record<string, unknown>>(
   method: string,
   path: string,
   body?: unknown,
 ): Promise<{ status: number; data: T }> {
-  const req = new Request(`http://localhost${path}`, {
+  const init: RequestInit = {
     method,
-    ...(body && {
-      body: JSON.stringify(body),
-      headers: { 'content-type': 'application/json' },
-    }),
-  });
+  };
+  if (body) {
+    init.body = JSON.stringify(body);
+    init.headers = { 'content-type': 'application/json' };
+  }
+  const req = new Request(`http://localhost${path}`, init);
 
   const res = await app.fetch(req);
-  const data = await res.json();
+  const data = (await res.json()) as T;
   return { status: res.status, data };
 }
 
@@ -82,11 +83,13 @@ describe('decision API', () => {
       );
 
       expect(status).toBe(200);
-      expect(data.decisions).toHaveLength(1);
-      expect(data.decisions[0].decision).toBe('approve');
-      expect(data.legalDecisions).toContain('approve');
-      expect(data.legalDecisions).toContain('retry');
-      expect(data.legalDecisions).toContain('dismiss');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response = data as any;
+      expect(response.decisions).toHaveLength(1);
+      expect(response.decisions[0].decision).toBe('approve');
+      expect(response.legalDecisions).toContain('approve');
+      expect(response.legalDecisions).toContain('retry');
+      expect(response.legalDecisions).toContain('dismiss');
     });
 
     it('returns 404 for nonexistent attention item', async () => {
@@ -144,11 +147,13 @@ describe('decision API', () => {
       );
 
       expect(status).toBe(201);
-      expect(data.decision.attentionId).toBe(item.id);
-      expect(data.decision.decision).toBe('approve');
-      expect(data.decision.actorType).toBe('human');
-      expect(data.decision.actorId).toBe('test-owner');
-      expect(data.decision.createdAt).toBeGreaterThan(0);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response = data as any;
+      expect(response.decision.attentionId).toBe(item.id);
+      expect(response.decision.decision).toBe('approve');
+      expect(response.decision.actorType).toBe('human');
+      expect(response.decision.actorId).toBe('test-owner');
+      expect(response.decision.createdAt).toBeGreaterThan(0);
     });
 
     it('returns 400 for malformed request', async () => {
@@ -163,7 +168,8 @@ describe('decision API', () => {
       );
 
       expect(status).toBe(400);
-      expect(data.error).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((data as any).error).toBeDefined();
     });
 
     it('returns 400 for invalid decision value', async () => {
@@ -178,7 +184,8 @@ describe('decision API', () => {
       );
 
       expect(status).toBe(400);
-      expect(data.error).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((data as any).error).toBeDefined();
     });
 
     it('returns 404 for nonexistent attention item', async () => {
@@ -191,7 +198,8 @@ describe('decision API', () => {
       );
 
       expect(status).toBe(404);
-      expect(data.error).toContain('not found');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((data as any).error).toContain('not found');
     });
 
     it('validates decision legality for attention kind', async () => {
@@ -204,9 +212,11 @@ describe('decision API', () => {
         { decision: 'retry' },
       );
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response = data as any;
       expect(status).toBe(400);
-      expect(data.error).toContain('not legal');
-      expect(data.legalDecisions).toEqual(['dismiss']);
+      expect(response.error).toContain('not legal');
+      expect(response.legalDecisions).toEqual(['dismiss']);
     });
 
     it('is idempotent: identical POSTs return the same decision', async () => {
@@ -220,9 +230,13 @@ describe('decision API', () => {
         decision: 'approve',
       });
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const firstData = first.data as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const secondData = second.data as any;
       expect(first.status).toBe(201);
       expect(second.status).toBe(201);
-      expect(first.data.decision.id).toBe(second.data.decision.id);
+      expect(firstData.decision.id).toBe(secondData.decision.id);
     });
 
     it('allows different decisions by the same actor', async () => {
@@ -236,9 +250,13 @@ describe('decision API', () => {
         decision: 'retry',
       });
 
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const approveData = approve.data as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const retryData = retry.data as any;
       expect(approve.status).toBe(201);
       expect(retry.status).toBe(201);
-      expect(approve.data.decision.id).not.toBe(retry.data.decision.id);
+      expect(approveData.decision.id).not.toBe(retryData.decision.id);
     });
 
     it('rejects extra fields in the request', async () => {
@@ -254,7 +272,8 @@ describe('decision API', () => {
       );
 
       expect(status).toBe(400);
-      expect(data.error).toBeDefined();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((data as any).error).toBeDefined();
     });
   });
 
@@ -268,8 +287,10 @@ describe('decision API', () => {
 
       const { data } = await callApi('GET', `/attention/${item.id}/decisions`);
 
-      expect(data.decisions).toHaveLength(1);
-      expect(data.decisions[0].decision).toBe('approve');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response = data as any;
+      expect(response.decisions).toHaveLength(1);
+      expect(response.decisions[0].decision).toBe('approve');
     });
 
     it('preserves all decisions when making new ones', async () => {
@@ -289,10 +310,12 @@ describe('decision API', () => {
 
       const { data } = await callApi('GET', `/attention/${item.id}/decisions`);
 
-      expect(data.decisions).toHaveLength(3);
-      expect(data.decisions[0].decision).toBe('approve');
-      expect(data.decisions[1].decision).toBe('retry');
-      expect(data.decisions[2].decision).toBe('dismiss');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const response = data as any;
+      expect(response.decisions).toHaveLength(3);
+      expect(response.decisions[0].decision).toBe('approve');
+      expect(response.decisions[1].decision).toBe('retry');
+      expect(response.decisions[2].decision).toBe('dismiss');
     });
   });
 });
