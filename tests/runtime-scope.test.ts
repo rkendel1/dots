@@ -2,6 +2,10 @@ import { expect, it } from 'vitest';
 import { validateRuntimeScope } from '../src/server/runtime-scope.js';
 import { memoryWorkspace } from './helpers/workspace.js';
 import { setupStatus } from '../src/server/platform-config.js';
+import {
+  EnvironmentCredentials,
+  intelligenceStatus,
+} from '../src/server/intelligence.js';
 it('blocks unbound cross-Dot run and inspector routes before contacting Intelligence', async () => {
   const store = await memoryWorkspace();
   const dot = (await store.store.dots())[0]!;
@@ -33,17 +37,15 @@ it('blocks unbound cross-Dot run and inspector routes before contacting Intellig
   ).resolves.toBeUndefined();
   store.state.close();
 });
-it('reports setup honestly without a standalone agent fallback', () => {
-  const status = setupStatus({
-    baseUrl: '',
-    voiceName: 'marin',
-    slackUsers: [],
-    runtimeUrl: '',
-  });
+it('reports setup honestly and never asks for the CopilotKit hosted-service key', () => {
+  const status = setupStatus(
+    { voiceName: 'marin', runtimeUrl: '' },
+    intelligenceStatus({}, new EnvironmentCredentials({})),
+  );
   expect(status.intelligence).toBe(false);
   expect(status.voice).toBe(false);
-  expect(status.slack).toBe('not_configured');
-  expect(status.missing).toContain('INTELLIGENCE_API_KEY');
+  expect(status.missing).toContain('Intelligence provider');
+  expect(status.missing).not.toContain('INTELLIGENCE_API_KEY');
 });
 it('rejects stop scope bypasses and misleading prefixes while allowing canonical owned routes', async () => {
   const store = await memoryWorkspace();

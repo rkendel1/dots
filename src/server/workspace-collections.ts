@@ -54,10 +54,8 @@ export interface GrantRecord {
 }
 
 /**
- * The application-side binding for an externally owned conversation thread.
- *
- * Conversation *messages* stay authoritative in CopilotKit Intelligence; this
- * records only OpenDots' binding and metadata.
+ * A conversation: its Dot, owner and title. Its run history and messages are
+ * stored alongside it in FeltDB by `ConversationStore`.
  */
 export interface ThreadBindingRecord {
   id: string;

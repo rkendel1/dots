@@ -3,86 +3,78 @@ import {
   setupStatus,
   type PlatformConfig,
 } from '../src/server/platform-config.js';
+import {
+  EnvironmentCredentials,
+  intelligenceStatus,
+} from '../src/server/intelligence.js';
+
 const config: PlatformConfig = {
-  intelligenceKey: 'fixture',
-  apiKey: 'fixture',
-  model: 'fixture',
-  baseUrl: 'https://example.com',
   runtimeUrl: '',
   voiceName: 'marin',
-  slackUsers: [],
+  voiceKey: 'fixture',
+  voiceModel: 'fixture',
 };
-it('never claims Slack online without a complete managed channel declaration', () => {
-  expect(setupStatus(config, 'online').slack).toBe('not_configured');
-  expect(
-    setupStatus({ ...config, slackChannel: 'support' }, 'online').slack,
-  ).toBe('setup_required');
-  expect(
-    setupStatus(
-      {
-        ...config,
-        slackChannel: 'support',
-        slackTeam: 'team',
-        slackUsers: ['owner'],
-      },
-      'online',
-    ).slack,
-  ).toBe('online');
-});
-it('disables voice when Intelligence provider is not configured', () => {
-  // Without any intelligence provider configured
-  expect(
-    setupStatus({
-      ...config,
-      apiKey: '',
-      model: '',
-      intelligenceKey: '',
-      voiceKey: 'fixture',
-      voiceModel: 'fixture',
-    }),
-  ).toMatchObject({ intelligence: false, voice: false });
+const credentials = new EnvironmentCredentials({
+  OPENAI_API_KEY: 'fixture',
+  ANTHROPIC_API_KEY: 'fixture',
 });
 
-it('supports provider-agnostic intelligence configuration', () => {
-  // OpenAI provider explicitly configured
+it('disables voice when no Intelligence provider is configured', () => {
+  const status = setupStatus(config, intelligenceStatus({}, credentials));
+  expect(status).toMatchObject({ intelligence: false, voice: false });
+  expect(status.missing).toEqual([
+    'Intelligence provider',
+    'Intelligence model',
+  ]);
+});
+
+it('reports OpenAI as ready with a model and a credential', () => {
   expect(
-    setupStatus({
-      ...config,
-      intelligenceProvider: 'openai',
-      apiKey: 'sk-...',
-      model: 'gpt-4',
-    }),
+    setupStatus(
+      config,
+      intelligenceStatus(
+        { provider: 'openai', model: 'gpt-4.1-mini' },
+        credentials,
+      ),
+    ),
   ).toMatchObject({
     intelligence: true,
     intelligenceProvider: 'openai',
+    voice: true,
     missing: [],
   });
 });
 
-it('supports alternative intelligence providers', () => {
-  // Anthropic provider configured
+it('reports Anthropic as ready through its own credential, not a CopilotKit key', () => {
+  const anthropicOnly = new EnvironmentCredentials({
+    ANTHROPIC_API_KEY: 'fixture',
+  });
   expect(
-    setupStatus({
-      ...config,
-      intelligenceProvider: 'anthropic',
-      intelligenceKey: 'claude-...',
-      apiKey: '',
-      model: '',
-    }),
+    setupStatus(
+      config,
+      intelligenceStatus(
+        { provider: 'anthropic', model: 'claude-haiku-4-5' },
+        anthropicOnly,
+      ),
+    ),
   ).toMatchObject({
     intelligence: true,
     intelligenceProvider: 'anthropic',
+    missing: [],
   });
 });
-it('reports activation failure until the SDK recovers online', () => {
-  const declared = {
-    ...config,
-    slackChannel: 'support',
-    slackTeam: 'team',
-    slackUsers: ['owner'],
-  };
-  expect(setupStatus(declared, 'offline', true).slack).toBe(
-    'activation_failed',
+
+it('names the missing provider credential variable without exposing anything else', () => {
+  const none = new EnvironmentCredentials({
+    INTELLIGENCE_API_KEY: 'copilotkit-hosted-key',
+  });
+  const status = setupStatus(
+    config,
+    intelligenceStatus(
+      { provider: 'anthropic', model: 'claude-haiku-4-5' },
+      none,
+    ),
   );
-  expect(setupStatus(declared, 'online', true).slack).toBe('online');
+  expect(status.intelligence).toBe(false);
+  expect(status.missing).toEqual(['ANTHROPIC_API_KEY']);
 });

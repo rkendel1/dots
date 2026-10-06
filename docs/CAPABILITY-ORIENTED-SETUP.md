@@ -39,7 +39,6 @@ Computers (Optional)       ● Connected
 
 Browser (Optional)         ○ Not connected
 Voice (Optional)           ○ Not configured
-Slack (Optional)           ○ Not connected
 ```
 
 The UI shows:
@@ -124,17 +123,6 @@ Voice provides speech I/O and depends on Intelligence.
 - If Intelligence is configured with another provider, Voice should work accordingly
 - The dependency is expressed as a capability relationship
 
-### Slack (Optional)
-
-Slack provides Slack workspace integration.
-
-**Status values:**
-- `not_configured` — Slack is not connected
-- `ready` — Slack is connected and configured
-
-**Exposes:**
-- `channel` — Connected channel name
-- `team` — Team ID (infrastructure detail, shown but not primary)
 
 ## API
 
@@ -165,10 +153,6 @@ Returns the capability-oriented Setup model:
     "required": false,
     "status": "not_configured",
     "reason": "requires Intelligence capability"
-  },
-  "slack": {
-    "required": false,
-    "status": "not_configured"
   }
 }
 ```
@@ -277,7 +261,6 @@ Computers           Optional    ● Connected
 
 Browser             Optional    ○ Not connected
 Voice               Optional    ○ Not configured
-Slack               Optional    ○ Not connected
 ```
 
 ## Future Work

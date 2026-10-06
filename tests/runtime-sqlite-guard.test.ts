@@ -140,6 +140,9 @@ const EXPECTED = [
   'decision_applications',
   'decision_proposals',
   'configurations',
+  'compute_readiness',
+  'conversation_runs',
+  'conversation_messages',
 ];
 
 /**
@@ -148,7 +151,9 @@ const EXPECTED = [
  * `executions` arrived in 0.2.0 and `attention` alongside it, both long after
  * SQLite was retired as a runtime store, so the Phase 6 migration has nothing to
  * import into either. `decisions`, `decision_applications`, `decision_proposals`,
- * and `configurations` came after SQLite and have no legacy source. They are
+ * `configurations`, `compute_readiness`, and the conversation history
+ * collections (`conversation_runs`, `conversation_messages`, previously held by
+ * CopilotKit's hosted service) came after SQLite and have no legacy source. They are
  * listed here explicitly rather than folded into the planner, so adding another
  * post-SQLite collection is a deliberate edit to this file rather than an accident.
  */
@@ -159,6 +164,9 @@ const NOT_MIGRATED = new Set([
   'decision_applications',
   'decision_proposals',
   'configurations',
+  'compute_readiness',
+  'conversation_runs',
+  'conversation_messages',
 ]);
 
 describe('every runtime collection is FeltDB-backed', () => {
@@ -175,9 +183,9 @@ describe('every runtime collection is FeltDB-backed', () => {
       opened.add(match[1]!);
   }
 
-  it('opens exactly the twenty-four expected collections', () => {
+  it('opens exactly the twenty-seven expected collections', () => {
     expect([...opened].sort()).toEqual([...EXPECTED].sort());
-    expect(EXPECTED).toHaveLength(24);
+    expect(EXPECTED).toHaveLength(27);
   });
 
   it('imports every migrated collection, and the runtime opens each one', async () => {

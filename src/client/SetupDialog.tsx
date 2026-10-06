@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import { AlertCircle, Check, Circle, Save, X } from 'lucide-react';
+import { AlertCircle, Check, Circle, Save } from 'lucide-react';
 import type {
   ConfigurationReadModel,
   ManagedConfiguration,
@@ -12,53 +12,74 @@ interface SetupDialogProps {
   isOpen: boolean;
 }
 
+type Section = 'intelligence' | 'browser' | 'voice' | 'computers';
+type Provider = 'anthropic' | 'openai';
+
+const PROVIDERS: Record<
+  Provider,
+  {
+    label: string;
+    credentialVariable: string;
+    modelPlaceholder: string;
+    baseUrl: string;
+  }
+> = {
+  anthropic: {
+    label: 'Anthropic (Claude)',
+    credentialVariable: 'ANTHROPIC_API_KEY',
+    modelPlaceholder: 'claude-haiku-4-5',
+    baseUrl: 'https://api.anthropic.com/v1/',
+  },
+  openai: {
+    label: 'OpenAI',
+    credentialVariable: 'OPENAI_API_KEY',
+    modelPlaceholder: 'gpt-4.1-mini',
+    baseUrl: 'https://api.openai.com/v1',
+  },
+};
+
 export function SetupDialog({ onComplete, isOpen }: SetupDialogProps) {
   const [config, setConfig] = useState<ConfigurationReadModel | null>(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
-  const [activeSection, setActiveSection] = useState<
-    'intelligence' | 'browser' | 'voice' | 'slack' | 'computers'
-  >('intelligence');
+  const [saved, setSaved] = useState(false);
+  const [activeSection, setActiveSection] = useState<Section>('intelligence');
   const [formData, setFormData] = useState<Partial<ManagedConfiguration>>({});
 
-  // Load configuration on mount
+  const load = async () => {
+    const data = await api<ConfigurationReadModel>('/configuration');
+    setConfig(data);
+    setFormData({
+      intelligence: {
+        provider: data.sections.intelligence.provider ?? 'anthropic',
+        model: data.sections.intelligence.model,
+        baseUrl: data.sections.intelligence.baseUrl,
+      },
+      browser: data.sections.browser,
+      voice: data.sections.voice,
+      computers: data.sections.computers,
+      appOrigin: data.sections.core.appOrigin,
+    });
+  };
+
   useEffect(() => {
     if (!isOpen) return;
-    const loadConfig = async () => {
-      try {
-        const data = await api<ConfigurationReadModel>('/configuration');
-        setConfig(data);
-        setFormData({
-          intelligence: data.sections.intelligence,
-          browser: data.sections.browser,
-          voice: data.sections.voice,
-          slack: data.sections.slack,
-          computers: data.sections.computers,
-          appOrigin: data.sections.core.appOrigin,
-        });
-      } catch (e) {
-        setError(
-          e instanceof Error ? e.message : 'Failed to load configuration',
-        );
-      }
-    };
-    void loadConfig();
+    setSaved(false);
+    load().catch((e) =>
+      setError(e instanceof Error ? e.message : 'Failed to load configuration'),
+    );
   }, [isOpen]);
 
   const handleSave = async () => {
     setSaving(true);
     setError('');
+    setSaved(false);
     try {
-      await api<ConfigurationReadModel>(
-        '/configuration',
-        'PUT',
-        formData,
-      );
+      await api('/configuration', 'PUT', managedPayload(formData));
       const updated = await api<ConfigurationReadModel>('/configuration');
       setConfig(updated);
-      if (updated.setupComplete && onComplete) {
-        onComplete();
-      }
+      setSaved(true);
+      if (updated.setupComplete) onComplete?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save configuration');
     } finally {
@@ -71,8 +92,8 @@ export function SetupDialog({ onComplete, isOpen }: SetupDialogProps) {
   const requiredMissing = config.requirements.filter(
     (r) => r.required && !r.configured,
   );
-  const allConfigured = config.requirements.every(
-    (r) => !r.required || r.configured,
+  const canSave = !!(
+    formData.intelligence?.provider && formData.intelligence?.model?.trim()
   );
 
   return (
@@ -91,7 +112,6 @@ export function SetupDialog({ onComplete, isOpen }: SetupDialogProps) {
         )}
 
         <div className="setup-content">
-          {/* Requirements Summary */}
           <div className="requirements-summary">
             <h2>Setup Status</h2>
             {config.requirements.map((req) => (
@@ -99,10 +119,13 @@ export function SetupDialog({ onComplete, isOpen }: SetupDialogProps) {
                 <div className="requirement-status">
                   {req.configured ? (
                     <Check className="icon-check" size={16} />
-                  ) : req.required ? (
-                    <Circle className="icon-missing" size={16} />
                   ) : (
-                    <Circle className="icon-optional" size={16} />
+                    <Circle
+                      className={
+                        req.required ? 'icon-missing' : 'icon-optional'
+                      }
+                      size={16}
+                    />
                   )}
                 </div>
                 <div className="requirement-label">
@@ -110,13 +133,14 @@ export function SetupDialog({ onComplete, isOpen }: SetupDialogProps) {
                   {req.required && !req.configured && (
                     <span className="required-badge">Required</span>
                   )}
-                  {!req.required && <span className="optional-badge">Optional</span>}
+                  {!req.required && (
+                    <span className="optional-badge">Optional</span>
+                  )}
                 </div>
                 <div className="requirement-source">
-                  {req.source === 'environment' && (
-                    <span className="source-env">Environment</span>
-                  )}
-                  {req.source === 'missing' && (
+                  {req.configured ? (
+                    <span className="source-env">Ready</span>
+                  ) : (
                     <span className="source-missing">Not configured</span>
                   )}
                 </div>
@@ -124,16 +148,13 @@ export function SetupDialog({ onComplete, isOpen }: SetupDialogProps) {
             ))}
           </div>
 
-          {/* Configuration Sections */}
           <div className="configuration-sections">
             <div className="section-tabs">
-              {(['intelligence', 'browser', 'voice', 'slack', 'computers'] as const).map(
+              {(['intelligence', 'browser', 'voice', 'computers'] as const).map(
                 (section) => (
                   <button
                     key={section}
-                    className={`section-tab ${
-                      activeSection === section ? 'active' : ''
-                    }`}
+                    className={`section-tab ${activeSection === section ? 'active' : ''}`}
                     onClick={() => setActiveSection(section)}
                   >
                     {section.charAt(0).toUpperCase() + section.slice(1)}
@@ -168,15 +189,6 @@ export function SetupDialog({ onComplete, isOpen }: SetupDialogProps) {
                   onChange={(data) => setFormData({ ...formData, voice: data })}
                 />
               )}
-              {activeSection === 'slack' && (
-                <SlackSection
-                  config={config.sections.slack}
-                  formData={formData.slack}
-                  onChange={(data) =>
-                    setFormData({ ...formData, slack: data })
-                  }
-                />
-              )}
               {activeSection === 'computers' && (
                 <ComputersSection
                   config={config.sections.computers}
@@ -189,7 +201,6 @@ export function SetupDialog({ onComplete, isOpen }: SetupDialogProps) {
             </div>
           </div>
 
-          {/* Core Settings */}
           <div className="core-settings">
             <h3>Application Origin (Optional)</h3>
             <input
@@ -205,30 +216,69 @@ export function SetupDialog({ onComplete, isOpen }: SetupDialogProps) {
         </div>
 
         <div className="setup-footer">
-          {requiredMissing.length > 0 && (
-            <div className="missing-count">
-              {requiredMissing.length} required field(s) missing
+          {saved && !requiredMissing.length ? (
+            <div className="setup-complete">
+              <Check size={16} />
+              <span>Saved. Setup is complete.</span>
             </div>
+          ) : (
+            requiredMissing.length > 0 && (
+              <div className="missing-count">
+                {saved ? 'Saved. Still needed: ' : 'Still needed: '}
+                {requiredMissing.map((r) => r.label).join(', ')}
+              </div>
+            )
           )}
           <button
             className="setup-button"
             onClick={handleSave}
-            disabled={saving || !allConfigured}
+            disabled={saving || !canSave}
           >
             {saving ? 'Saving...' : 'Save Configuration'}
             {!saving && <Save size={16} />}
           </button>
         </div>
-
-        {allConfigured && config.setupComplete && (
-          <div className="setup-complete">
-            <Check size={20} />
-            <span>Setup Complete! You can now start using OpenDots.</span>
-          </div>
-        )}
       </div>
     </div>
   );
+}
+
+// Send only managed fields and drop blanks: the server rejects "" for URLs and
+// names, and the read model carries status objects that are not settings.
+function managedPayload(form: Partial<ManagedConfiguration>) {
+  const pick = <T extends object>(source: T | undefined, keys: (keyof T)[]) => {
+    const out: Partial<T> = {};
+    for (const key of keys) {
+      const value = source?.[key];
+      if (value === undefined || value === null) continue;
+      if (typeof value === 'string' && !value.trim()) continue;
+      out[key] = (
+        typeof value === 'string' ? value.trim() : value
+      ) as T[keyof T];
+    }
+    return Object.keys(out).length ? out : undefined;
+  };
+  type M = ManagedConfiguration;
+  return {
+    intelligence: pick<NonNullable<M['intelligence']>>(form.intelligence, [
+      'provider',
+      'model',
+      'baseUrl',
+    ]),
+    browser: pick<NonNullable<M['browser']>>(form.browser, [
+      'url',
+      'host',
+      'port',
+    ]),
+    voice: pick<NonNullable<M['voice']>>(form.voice, ['model', 'name']),
+    computers: pick<NonNullable<M['computers']>>(form.computers, [
+      'namespace',
+      'memoryBytes',
+      'runtime',
+      'engineSocket',
+    ]),
+    appOrigin: form.appOrigin?.trim() || undefined,
+  };
 }
 
 function IntelligenceSection({
@@ -236,61 +286,78 @@ function IntelligenceSection({
   formData,
   onChange,
 }: {
-  config: any;
-  formData?: any;
-  onChange: (data: any) => void;
+  config: ConfigurationReadModel['sections']['intelligence'];
+  formData?: ManagedConfiguration['intelligence'];
+  onChange: (data: ManagedConfiguration['intelligence']) => void;
 }) {
+  const [showAdvanced, setShowAdvanced] = useState(!!formData?.baseUrl);
+  const provider: Provider = formData?.provider ?? 'anthropic';
+  const meta = PROVIDERS[provider];
+  // Status is known for the saved provider; a newly picked one is checked on save.
+  const statusKnown = config.provider === provider;
+
   return (
     <div className="section">
       <h3>Intelligence Configuration</h3>
       <div className="form-group">
-        <label>API URL (Optional)</label>
-        <input
-          type="url"
-          placeholder="https://..."
-          value={formData?.apiUrl || ''}
+        <label>Provider *</label>
+        <select
+          value={provider}
           onChange={(e) =>
-            onChange({ ...formData, apiUrl: e.target.value })
+            onChange({ ...formData, provider: e.target.value as Provider })
           }
           className="setup-input"
-        />
+        >
+          {(Object.keys(PROVIDERS) as Provider[]).map((id) => (
+            <option key={id} value={id}>
+              {PROVIDERS[id].label}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="form-group">
-        <label>WebSocket URL (Optional)</label>
-        <input
-          type="url"
-          placeholder="wss://..."
-          value={formData?.wsUrl || ''}
-          onChange={(e) => onChange({ ...formData, wsUrl: e.target.value })}
-          className="setup-input"
-        />
-      </div>
-      <div className="form-group">
-        <label>Model (Optional)</label>
+        <label>Model *</label>
         <input
           type="text"
-          placeholder="gpt-4"
+          placeholder={meta.modelPlaceholder}
           value={formData?.model || ''}
           onChange={(e) => onChange({ ...formData, model: e.target.value })}
           className="setup-input"
         />
       </div>
-      <div className="form-group">
-        <label>Base URL (Optional)</label>
-        <input
-          type="url"
-          placeholder="https://api.openai.com/v1"
-          value={formData?.baseUrl || ''}
-          onChange={(e) =>
-            onChange({ ...formData, baseUrl: e.target.value })
-          }
-          className="setup-input"
-        />
-      </div>
       <div className="secret-status">
-        <strong>Intelligence API Key:</strong>{' '}
-        {config?.apiKey?.configured ? '✓ Configured' : '○ Not configured'}
+        <strong>{meta.label.split(' ')[0]} credential:</strong>{' '}
+        {statusKnown
+          ? config.apiKey.configured
+            ? '✓ Configured'
+            : '○ Not configured'
+          : 'checked when you save'}
+        <small style={{ display: 'block', marginTop: 6 }}>
+          Provider keys are never stored by OpenDots. Set{' '}
+          <code>{meta.credentialVariable}</code> in the server environment (
+          <code>.env</code>) and restart.
+        </small>
       </div>
+
+      <button
+        type="button"
+        className="text-button"
+        onClick={() => setShowAdvanced(!showAdvanced)}
+      >
+        {showAdvanced ? 'Hide' : 'Show'} advanced settings
+      </button>
+      {showAdvanced && (
+        <div className="form-group">
+          <label>Base URL (Optional)</label>
+          <input
+            type="url"
+            placeholder={meta.baseUrl}
+            value={formData?.baseUrl || ''}
+            onChange={(e) => onChange({ ...formData, baseUrl: e.target.value })}
+            className="setup-input"
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -300,9 +367,9 @@ function BrowserSection({
   formData,
   onChange,
 }: {
-  config: any;
-  formData?: any;
-  onChange: (data: any) => void;
+  config: ConfigurationReadModel['sections']['browser'];
+  formData?: ManagedConfiguration['browser'];
+  onChange: (data: ManagedConfiguration['browser']) => void;
 }) {
   return (
     <div className="section">
@@ -345,7 +412,7 @@ function BrowserSection({
       </div>
       <div className="secret-status">
         <strong>Browser Secret:</strong>{' '}
-        {config?.secret?.configured ? '✓ Configured' : '○ Not configured'}
+        {config.secret.configured ? '✓ Configured' : '○ Not configured'}
       </div>
     </div>
   );
@@ -356,9 +423,9 @@ function VoiceSection({
   formData,
   onChange,
 }: {
-  config: any;
-  formData?: any;
-  onChange: (data: any) => void;
+  config: ConfigurationReadModel['sections']['voice'];
+  formData?: ManagedConfiguration['voice'];
+  onChange: (data: ManagedConfiguration['voice']) => void;
 }) {
   return (
     <div className="section">
@@ -368,7 +435,7 @@ function VoiceSection({
         <label>Model</label>
         <input
           type="text"
-          placeholder="e.g., tts-1"
+          placeholder="e.g., gpt-realtime"
           value={formData?.model || ''}
           onChange={(e) => onChange({ ...formData, model: e.target.value })}
           className="setup-input"
@@ -386,73 +453,7 @@ function VoiceSection({
       </div>
       <div className="secret-status">
         <strong>Voice API Key:</strong>{' '}
-        {config?.apiKey?.configured ? '✓ Configured' : '○ Not configured'}
-      </div>
-    </div>
-  );
-}
-
-function SlackSection({
-  config,
-  formData,
-  onChange,
-}: {
-  config: any;
-  formData?: any;
-  onChange: (data: any) => void;
-}) {
-  return (
-    <div className="section">
-      <h3>Slack Configuration</h3>
-      <p className="section-help">Configure optional Slack integration</p>
-      <div className="form-group">
-        <label>Channel Name</label>
-        <input
-          type="text"
-          placeholder="opendots"
-          value={formData?.channelName || ''}
-          onChange={(e) =>
-            onChange({ ...formData, channelName: e.target.value })
-          }
-          className="setup-input"
-        />
-      </div>
-      <div className="form-group">
-        <label>Team ID</label>
-        <input
-          type="text"
-          placeholder="T1234567890"
-          value={formData?.teamId || ''}
-          onChange={(e) => onChange({ ...formData, teamId: e.target.value })}
-          className="setup-input"
-        />
-      </div>
-      <div className="form-group">
-        <label>User IDs (comma-separated)</label>
-        <input
-          type="text"
-          placeholder="U1234567890,U0987654321"
-          value={(formData?.userIds || []).join(',')}
-          onChange={(e) =>
-            onChange({
-              ...formData,
-              userIds: e.target.value
-                .split(',')
-                .map((v) => v.trim())
-                .filter(Boolean),
-            })
-          }
-          className="setup-input"
-        />
-      </div>
-      <div className="form-group">
-        <label>Dot ID (Optional)</label>
-        <input
-          type="text"
-          value={formData?.dotId || ''}
-          onChange={(e) => onChange({ ...formData, dotId: e.target.value })}
-          className="setup-input"
-        />
+        {config.apiKey.configured ? '✓ Configured' : '○ Not configured'}
       </div>
     </div>
   );
@@ -463,9 +464,9 @@ function ComputersSection({
   formData,
   onChange,
 }: {
-  config: any;
-  formData?: any;
-  onChange: (data: any) => void;
+  config: ConfigurationReadModel['sections']['computers'];
+  formData?: ManagedConfiguration['computers'];
+  onChange: (data: ManagedConfiguration['computers']) => void;
 }) {
   return (
     <div className="section">
@@ -477,9 +478,7 @@ function ComputersSection({
           type="text"
           placeholder="opendots"
           value={formData?.namespace || ''}
-          onChange={(e) =>
-            onChange({ ...formData, namespace: e.target.value })
-          }
+          onChange={(e) => onChange({ ...formData, namespace: e.target.value })}
           className="setup-input"
         />
       </div>
@@ -492,7 +491,9 @@ function ComputersSection({
           onChange={(e) =>
             onChange({
               ...formData,
-              memoryBytes: e.target.value ? parseInt(e.target.value) : undefined,
+              memoryBytes: e.target.value
+                ? parseInt(e.target.value)
+                : undefined,
             })
           }
           className="setup-input"
@@ -522,11 +523,13 @@ function ComputersSection({
       </div>
       <div className="secret-status">
         <strong>Supervisor Token:</strong>{' '}
-        {config?.supervisorToken?.configured ? '✓ Configured' : '○ Not configured'}
+        {config.supervisorToken.configured
+          ? '✓ Configured'
+          : '○ Not configured'}
       </div>
       <div className="secret-status">
         <strong>Computer Token:</strong>{' '}
-        {config?.token?.configured ? '✓ Configured' : '○ Not configured'}
+        {config.token.configured ? '✓ Configured' : '○ Not configured'}
       </div>
     </div>
   );

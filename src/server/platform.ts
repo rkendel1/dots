@@ -1,82 +1,60 @@
+import './copilotkit-telemetry.js';
 import { ComputerService } from './computer-service.js';
 import { PageService } from './page-service.js';
 import { randomUUID } from 'node:crypto';
+import type { BaseEvent, Message, RunAgentInput } from '@ag-ui/core';
+import { EventType } from '@ag-ui/core';
 import {
-  CopilotKitIntelligence,
   CopilotRuntime,
   createCopilotHonoHandler,
   type CopilotHonoApp,
 } from '@copilotkit/runtime/v2';
-import { createSlackChannel } from './slack-channel.js';
-export { slackIdentity } from './slack-channel.js';
 import { Store } from './store.js';
 import { WorkspaceStore } from './workspace.js';
 import { DotAgent } from './dot-agent.js';
-import { runThreadTurn } from './headless.js';
+import { currentTurnText } from './headless.js';
 import { setupStatus, type PlatformConfig } from './platform-config.js';
 import { validateRuntimeScope } from './runtime-scope.js';
-import { learningSelector } from './learning.js';
+import { ConversationStore } from './conversation-store.js';
+import { FeltAgentRunner } from './felt-agent-runner.js';
+import type { IntelligenceService } from './intelligence.js';
+import { voiceReceiptMessagePrefix } from '../shared/voice-receipt.js';
+
+/**
+ * The OpenDots conversation platform.
+ *
+ * CopilotKit's runtime serves the chat protocol in SSE mode. Conversation
+ * history is OpenDots state in FeltDB (via {@link FeltAgentRunner}); model
+ * inference is the Intelligence capability, resolved per run from durable Setup
+ * configuration. CopilotKit's hosted service is not used.
+ */
 export class Platform {
-  private channelStartupFailed = false;
   readonly pages: PageService;
   readonly computers: ComputerService;
-  readonly intelligence?: CopilotKitIntelligence;
-  readonly handler?: CopilotHonoApp;
-  /**
-   * The Dot that owns the Slack channel, resolved once by `create`.
-   *
-   * It is passed in rather than read here because the durable Dot list is
-   * async and this constructor is not.
-   */
+  readonly conversations: ConversationStore;
+  readonly runner: FeltAgentRunner;
+  readonly handler: CopilotHonoApp;
+
   private constructor(
     readonly store: Store,
     readonly workspace: WorkspaceStore,
     readonly config: PlatformConfig,
-    channelDotId: string | undefined,
+    readonly intelligence: IntelligenceService,
   ) {
     this.computers = new ComputerService(
       workspace,
       config,
       async () => (await store.settings()).paused,
     );
-    this.pages = new PageService(workspace, () => {
-      this.requireReady();
-      return this.intelligence!;
-    });
-    if (!config.intelligenceKey) return;
-    this.intelligence = new CopilotKitIntelligence({
-      apiKey: config.intelligenceKey,
-      apiUrl: config.intelligenceApiUrl,
-      wsUrl: config.intelligenceWsUrl,
-      getLearningContainerId: learningSelector(workspace, channelDotId),
-    });
-    const channels = [];
-    if (config.slackChannel && config.slackTeam && config.slackUsers.length) {
-      const dotId = channelDotId!;
-      const slack = createSlackChannel({
-        name: config.slackChannel,
-        config,
-        ownerId: workspace.ownerId,
-        paused: async () => (await store.settings()).paused,
-        agent: () => new DotAgent(store, workspace, config, dotId, true),
-      });
-      channels.push(slack);
-    }
+    this.conversations = new ConversationStore(workspace);
+    this.runner = new FeltAgentRunner(this.conversations);
+    this.pages = new PageService(workspace, () => this.conversations);
     const runtime = new CopilotRuntime({
-      intelligence: this.intelligence,
-      identifyUser: async () => ({
-        id: workspace.ownerId,
-        name: 'OpenDots owner',
-      }),
+      runner: this.runner,
       agents: async () =>
         Object.fromEntries(
-          (await workspace.dots()).map((dot) => [
-            dot.id,
-            new DotAgent(store, workspace, config, dot.id),
-          ]),
+          (await workspace.dots()).map((dot) => [dot.id, this.agent(dot.id)]),
         ),
-      channels,
-      generateThreadNames: true,
     });
     this.handler = createCopilotHonoHandler({
       runtime,
@@ -84,84 +62,50 @@ export class Platform {
       cors: { origin: [] },
     });
   }
-  /**
-   * Build the platform, resolving the channel Dot from durable state first.
-   *
-   * The Slack Dot check still fails fast, before any listener starts, exactly as
-   * the constructor version did.
-   */
+
   static async create(
     store: Store,
     workspace: WorkspaceStore,
     config: PlatformConfig,
+    intelligence: IntelligenceService,
   ) {
-    const dots = await workspace.dots();
-    const channelDotId = config.slackDotId ?? dots[0]?.id;
-    if (
-      config.slackChannel &&
-      config.slackTeam &&
-      config.slackUsers.length &&
-      !dots.some((dot) => dot.id === channelDotId)
-    )
-      throw new Error('SLACK_DOT_ID does not identify an existing Dot.');
-    return new Platform(store, workspace, config, channelDotId);
+    return new Platform(store, workspace, config, intelligence);
   }
-  setup() {
-    return setupStatus(
+
+  private agent(dotId: string) {
+    return new DotAgent(
+      this.store,
+      this.workspace,
       this.config,
-      this.handler?.channels?.status().overall ??
-        (this.config.slackChannel ? 'setup_required' : 'not_configured'),
-      this.channelStartupFailed,
+      this.intelligence,
+      dotId,
     );
   }
-  requireReady() {
-    const missing = this.setup().missing;
+
+  async setup() {
+    return setupStatus(this.config, await this.intelligence.status());
+  }
+
+  async requireReady() {
+    const { missing } = await this.setup();
     if (missing.length)
-      throw new Error(
-        `Setup required: ${missing.join(', ')}. Conversations require CopilotKit Intelligence.`,
-      );
+      throw new Error(`Setup required: ${missing.join(', ')}.`);
   }
-  async start() {
-    if (this.handler?.channels) {
-      try {
-        await this.handler.channels.ready({ timeoutMs: 15000 });
-        this.channelStartupFailed = false;
-      } catch (error) {
-        this.channelStartupFailed = true;
-        throw error;
-      }
-    }
-  }
-  async stop() {
-    await this.handler?.channels?.stop();
-  }
+
+  async stop() {}
+
   async createConversation(dotId: string, title: string) {
-    this.requireReady();
+    await this.requireReady();
     if (!(await this.workspace.dot(dotId))) throw new Error('Dot not found.');
-    const id = randomUUID();
-    try {
-      await this.intelligence!.createThread({
-        threadId: id,
-        userId: this.workspace.ownerId,
-        agentId: dotId,
-        name: title,
-      });
-    } catch {
-      throw new Error(
-        'Intelligence could not create this conversation. Check the runtime key and connection.',
-      );
-    }
-    return this.workspace.bindThread(id, dotId, title);
+    return this.workspace.bindThread(randomUUID(), dotId, title);
   }
+
   async history(threadId: string): Promise<string> {
-    this.requireReady();
-    await this.workspace.requireThread(threadId);
-    const history = await this.intelligence!.getThreadMessages({
-      threadId,
-      userId: this.workspace.ownerId,
-    });
-    return history.messages
-      .filter((message) => ['user', 'assistant'].includes(message.role))
+    await this.requireReady();
+    return (await this.conversations.messages(threadId))
+      .filter(
+        (message) => message.role === 'user' || message.role === 'assistant',
+      )
       .slice(-12)
       .map(
         (message) =>
@@ -170,12 +114,8 @@ export class Platform {
       .join('\n')
       .slice(-12000);
   }
+
   async handle(request: Request): Promise<Response> {
-    if (!this.handler)
-      return Response.json(
-        { error: 'Setup required: INTELLIGENCE_API_KEY.' },
-        { status: 503 },
-      );
     let body: unknown;
     if (request.method !== 'GET' && request.method !== 'HEAD')
       body = await request
@@ -197,24 +137,62 @@ export class Platform {
     }
     return this.handler.fetch(request);
   }
+
+  /**
+   * Run one server-initiated turn (scheduled task, voice compute) through the
+   * same runner the chat uses, so it is persisted identically.
+   */
   async turn(
     threadId: string,
     prompt: string,
     signal: AbortSignal,
     metadata?: Record<string, unknown>,
   ): Promise<string> {
-    this.requireReady();
+    await this.requireReady();
+    signal.throwIfAborted();
     const thread = await this.workspace.requireThread(threadId);
-    return runThreadTurn(
-      this.config.runtimeUrl,
-      this.config.ownerToken
-        ? { Authorization: `Bearer ${this.config.ownerToken}` }
-        : {},
-      thread.dotId,
+    const history = await this.conversations.messages(threadId);
+    const user = {
+      id: `${metadata?.opendotsSource === 'voice_receipt' ? voiceReceiptMessagePrefix : ''}${randomUUID()}`,
+      role: 'user',
+      content: prompt,
+      ...(metadata ? { metadata } : {}),
+    } as Message;
+    const agent = this.agent(thread.dotId);
+    agent.threadId = threadId;
+    agent.setMessages([...history, user]);
+    const input: RunAgentInput = {
       threadId,
-      prompt,
-      signal,
-      metadata,
-    );
+      runId: randomUUID(),
+      messages: [...history, user],
+      tools: [],
+      context: [],
+      state: {},
+      forwardedProps: {},
+    };
+    let runError: Error | undefined;
+    const stop = () => void this.runner.stop({ threadId });
+    signal.addEventListener('abort', stop, { once: true });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.runner.run({ threadId, agent, input }).subscribe({
+          next: (event: BaseEvent) => {
+            if (event.type === EventType.RUN_ERROR)
+              runError = new Error(
+                (event as BaseEvent & { message: string }).message,
+              );
+          },
+          error: reject,
+          complete: resolve,
+        });
+      });
+      signal.throwIfAborted();
+      return currentTurnText(
+        agent.messages.slice(history.length + 1),
+        runError,
+      );
+    } finally {
+      signal.removeEventListener('abort', stop);
+    }
   }
 }

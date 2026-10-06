@@ -110,6 +110,7 @@ export function pageRoutes(platform: Platform) {
       .strict()
       .safeParse(await c.req.json());
     if (!data.success) return c.json({ error: 'Choose a specialist.' }, 400);
+    await platform.requireReady();
     return c.json(
       await platform.pages.conversation(
         c.req.param('spaceId'),

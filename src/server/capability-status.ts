@@ -9,12 +9,10 @@
  * - Computers (optional, Compute-backed)
  * - Browser (optional)
  * - Voice (optional, requires Intelligence)
- * - Slack (optional)
  */
 
 import type { ComputeReadinessRecord } from './compute-readiness-store.js';
 import type { ConfigurationReadModel } from '../shared/types.js';
-import type { PlatformConfig } from './platform-config.js';
 
 export interface CapabilityStatus {
   status: 'ready' | 'configured' | 'not_configured' | 'error';
@@ -47,18 +45,11 @@ export interface VoiceCapability extends CapabilityStatus {
   credentialConfigured: boolean;
 }
 
-export interface SlackCapability extends CapabilityStatus {
-  required: false;
-  channel?: string;
-  team?: string;
-}
-
 export interface SetupCapabilitiesModel {
   intelligence: IntelligenceCapability;
   computers: ComputeCapability;
   browser: BrowserCapability;
   voice: VoiceCapability;
-  slack: SlackCapability;
 }
 
 /**
@@ -76,7 +67,8 @@ export function buildCapabilityStatus(
   const intelligence: IntelligenceCapability = {
     required: true,
     status: intelligenceSection.configured ? 'ready' : 'not_configured',
-    provider: intelligenceSection.provider as 'openai' | 'anthropic' | undefined,
+    provider: intelligenceSection.provider as
+      'openai' | 'anthropic' | undefined,
     model: intelligenceSection.model,
     credentialConfigured: intelligenceSection.apiKey.configured,
   };
@@ -94,7 +86,8 @@ export function buildCapabilityStatus(
   const computers: ComputeCapability = {
     required: false,
     status: computeSection.available ? 'ready' : 'not_configured',
-    capabilities: computerCapabilities.length > 0 ? computerCapabilities : undefined,
+    capabilities:
+      computerCapabilities.length > 0 ? computerCapabilities : undefined,
     endpoint: computeSection.endpoint,
     reason: computeSection.error,
   };
@@ -111,20 +104,16 @@ export function buildCapabilityStatus(
   const voiceSection = config.sections.voice;
   const voice: VoiceCapability = {
     required: false,
-    status: intelligenceSection.configured && voiceSection.model ? 'ready' : 'not_configured',
+    status:
+      intelligenceSection.configured && voiceSection.model
+        ? 'ready'
+        : 'not_configured',
     model: voiceSection.model,
     voice: voiceSection.name,
     credentialConfigured: voiceSection.apiKey.configured,
-    reason: !intelligenceSection.configured ? 'requires Intelligence capability' : undefined,
-  };
-
-  // Slack: optional capability
-  const slackSection = config.sections.slack;
-  const slack: SlackCapability = {
-    required: false,
-    status: slackSection.channelName && slackSection.teamId ? 'ready' : 'not_configured',
-    channel: slackSection.channelName,
-    team: slackSection.teamId,
+    reason: !intelligenceSection.configured
+      ? 'requires Intelligence capability'
+      : undefined,
   };
 
   return {
@@ -132,7 +121,6 @@ export function buildCapabilityStatus(
     computers,
     browser,
     voice,
-    slack,
   };
 }
 
@@ -141,6 +129,8 @@ export function buildCapabilityStatus(
  *
  * All required capabilities must be ready.
  */
-export function isSetupCapabilityComplete(capabilities: SetupCapabilitiesModel): boolean {
+export function isSetupCapabilityComplete(
+  capabilities: SetupCapabilitiesModel,
+): boolean {
   return capabilities.intelligence.status === 'ready';
 }

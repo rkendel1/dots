@@ -123,7 +123,7 @@ OpenDots is a starting point for building your own agent workspace. Clone it, de
 
 A Space is a home for working documents. Dots appear separately in navigation and can be granted access to multiple Spaces in their settings. Each Dot has a default destination for saved pages; existing installations retain their original Space access. Browse pages in a searchable library, switch between grid and list views, and organize documents as nested subpages. Open a page in a focused visual editor with formatting, slash commands, and undo/redo. Write directly, save a conversation as a page, or ask a specialist to create and revise content.
 
-Pages stay in the local workspace database. Their conversations use CopilotKit Threads, with a separate conversation for each page and specialist. Page links connect the document workspace to Dot chat. Manual editing works before you configure conversation services. Autosave reports its progress, failed saves retain your draft, and revision checks prevent stale edits from overwriting newer content. Markdown source mode remains available.
+Pages stay in the local workspace database. Their conversations are stored in FeltDB alongside the pages, with a separate conversation for each page and specialist. Page links connect the document workspace to Dot chat. Manual editing works before you configure conversation services. Autosave reports its progress, failed saves retain your draft, and revision checks prevent stale edits from overwriting newer content. Markdown source mode remains available.
 
 <div align="center">
 
@@ -181,41 +181,22 @@ https://github.com/user-attachments/assets/3c06cf71-39ed-4e2b-b846-5463b2722389
 
 _Connect, talk, mute, minimize, and return to chat. This is a silent screen capture of a real call, with waiting time trimmed and playback accelerated._
 
-### Slack
-
-Mention a Dot through a managed Slack connection using Channels SDK, then continue in its thread. The integration follows [OpenTag](https://github.com/CopilotKit/OpenTag), with an explicit workspace/user allowlist and a selected specialist. See [Slack setup](docs/SETUP.md#slack) to connect your deployment.
-
-<div align="center">
-
-<table><tr><td>
-
-https://github.com/user-attachments/assets/27d03a6c-a9e0-4c29-8d96-fafe0fbae20f
-
-</td></tr></table>
-
-</div>
-
-Bring your agents into Slack with [Channels SDK](https://github.com/CopilotKit/channels-sdk). See the [managed Channels documentation](https://docs.copilotkit.ai/intelligence/channels) to connect them through CopilotKit Intelligence.
-
 ## Architecture
 
 ### AG-UI connects the agent to the interface
 
 [AG-UI](https://docs.ag-ui.com/introduction) carries streamed messages, tool calls, and agent state between the backend and CopilotKit components. Computer activity appears inline as the agent works; human-in-the-loop cards pause a tool call for your decision before it continues.
 
-The template uses TanStack AI for model streaming and server-tool execution, CopilotKit's React SDK and runtime, Intelligence for durable Threads, and Channels SDK for Slack. Pages, application metadata, and background-work state are stored separately from conversation history.
+The template uses TanStack AI for model streaming and server-tool execution, and CopilotKit's React SDK and open-source runtime for the chat protocol. Everything durable — pages, Spaces, Dots, work state, configuration, and conversation history — lives in FeltDB. OpenDots does not use any CopilotKit hosted service. See [Self-hosted conversations](docs/SELF-HOSTED-CONVERSATIONS.md).
 
 ```mermaid
 flowchart TB
-  Web["Web app: pages, Spaces, Dots, chat"] -->|AG-UI| Runtime[CopilotKit runtime]
-  Slack[Slack] <--> Managed[Managed channel connection]
-  Managed <--> Channels[Channels SDK]
-  Channels --> Agents[Specialist compute agents]
-  Runtime --> Agents
-  Agents --> AI[TanStack AI]
-  AI --> Provider[OpenAI-compatible model provider]
-  Runtime <--> Intelligence["Intelligence / Threads"]
-  Channels <--> Intelligence
+  Web["Web app: pages, Spaces, Dots, chat"] -->|AG-UI| Runtime["CopilotKit runtime (library, SSE mode)"]
+  Runtime --> Runner[FeltDB agent runner]
+  Runner --> History[(Conversations and messages)]
+  Runner --> Agents[Specialist agents]
+  Agents --> Intelligence["Intelligence: Setup provider + model"]
+  Intelligence --> Provider[OpenAI-compatible provider: Anthropic or OpenAI]
   Web <--> Speech[Realtime speech]
   Speech --> Bridge[Compute bridge]
   Bridge --> Agents
@@ -223,9 +204,11 @@ flowchart TB
   Controls --> Computer[Isolated browser / workspace]
   Agents --> Jobs[Background work]
   Runtime --> Metadata[(Pages, Spaces, Dots, work metadata)]
+  History --- FeltDB[(FeltDB)]
+  Metadata --- FeltDB
 ```
 
-You configure the Intelligence project, model provider, and channel connection for your deployment; calls also need a speech provider. Credentials stay on the server. Missing configuration should produce a clear setup state, and test fixtures should remain visibly separate from live integrations.
+You choose the model provider and model in Setup and supply that provider's key in the server environment; calls also need a speech provider. Credentials stay on the server. Missing configuration should produce a clear setup state, and test fixtures should remain visibly separate from live integrations.
 
 [OpenMuse](https://github.com/CopilotKit/OpenMuse) and [OpenBot](https://github.com/CopilotKit/openbot) are code references for persistent work, agent computers, and execution controls. OpenDots can be adapted to your own workflows and deployment choices.
 
@@ -241,9 +224,9 @@ cp .env.example .env
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173**. You can create Spaces, write pages, and configure Dots before connecting services. Add your conversation and model settings to `.env` to start chatting.
+Open **http://127.0.0.1:5173**. You can create Spaces, write pages, and configure Dots before connecting services. Choose a provider and model in Setup and put that provider's key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`) in `.env` to start chatting.
 
-See [Setup](docs/SETUP.md) for configuration, Slack, calls, the browser service, and Docker.
+See [Setup](docs/SETUP.md) for configuration, calls, the browser service, and Docker.
 
 ## Development status
 
@@ -251,8 +234,7 @@ See [Setup](docs/SETUP.md) for configuration, Slack, calls, the browser service,
 | -------------------------- | ------------------------------------------------------------------------------------------------- |
 | Spaces and Specialist Dots | Saved names, role instructions, and per-Dot research and memory permissions                       |
 | Pages                      | Searchable library, visual editor, slash commands, autosave, and revision checks                  |
-| Conversations              | React SDK chat and Threads integration, page-specific conversations, and source links             |
-| Slack                      | Managed Channels SDK declaration with workspace and user allowlists                               |
+| Conversations              | React SDK chat with durable FeltDB history, page-specific conversations, and source links         |
 | Calls                      | WebRTC speech, delegated compute, bounded sessions, hangup, and timeline receipts                 |
 | Background work            | Scheduled server-side turns in their original conversation, with pause and retry controls         |
 | Browser                    | Separate read-only public-page service with page capture and navigation limits                    |
@@ -260,7 +242,7 @@ See [Setup](docs/SETUP.md) for configuration, Slack, calls, the browser service,
 | Memory                     | User-managed preferences that permitted Dots can use                                              |
 | Deployment                 | Local Node setup and separate application/browser containers                                      |
 
-Local checks cover setup, persistence, permissions, SDK failure handling, and browser isolation. Automated tests use service fixtures. **Live Intelligence, model responses, and page-context chat were verified on September 29, 2026.** Live OpenBot computer browsing, file creation, shell verification, and file persistence across stop/start were also verified locally. Live Realtime speech, call controls, and receipt persistence were verified locally on September 30, 2026. Slack and spoken compute delegation still need connected-service verification. See [recording notes](docs/demos/README.md) for the demonstrated flows and limits.
+Local checks cover setup, persistence, permissions, SDK failure handling, and browser isolation. Automated tests use service fixtures. Live model responses and page-context chat were verified on September 29, 2026 against the earlier hosted-conversation runtime; the self-hosted conversation path is covered by automated end-to-end and process-restart tests with a stubbed provider, and still needs a live provider check. Live OpenBot computer browsing, file creation, shell verification, and file persistence across stop/start were also verified locally. Live Realtime speech, call controls, and receipt persistence were verified locally on September 30, 2026. Spoken compute delegation still needs connected-service verification. See [recording notes](docs/demos/README.md) for the demonstrated flows and limits.
 
 This is a single-owner starting point. Shared editing, invitations, file uploads, and interactive page embeds are not included. Schedules are recurring instructions, not a complete goal or event-trigger system. Specialist Dots have separate roles and conversations; multi-Dot group conversations and automatic delegation are further work.
 
@@ -279,11 +261,9 @@ See [Contributing](CONTRIBUTING.md) for development guidance and [Security](SECU
 ## References
 
 - [AG-UI documentation](https://docs.ag-ui.com/introduction)
-- [CopilotKit documentation](https://docs.copilotkit.ai/intelligence/overview)
-- [Channels SDK](https://github.com/CopilotKit/channels-sdk)
+- [CopilotKit documentation](https://docs.copilotkit.ai)
 - [OpenMuse](https://github.com/CopilotKit/OpenMuse)
 - [OpenBot](https://github.com/CopilotKit/openbot)
-- [OpenTag](https://github.com/CopilotKit/OpenTag) — Channels SDK integration reference
 
 ## License
 

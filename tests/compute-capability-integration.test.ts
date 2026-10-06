@@ -12,10 +12,21 @@ import {
 } from '../src/server/compute-capability-discovery.js';
 import { ComputeReadinessStore } from '../src/server/compute-readiness-store.js';
 import { openFeltState } from '../src/server/felt/state.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// Never the default path: that is the developer's real `data/opendots-state`.
+const statePath = () =>
+  join(mkdtempSync(join(tmpdir(), 'opendots-compute-')), 'state');
 
 describe('Compute Capability Discovery', { timeout: 10000 }, () => {
   it('reports unavailable when endpoint is unreachable', async () => {
-    const discovery = new ComputeCapabilityDiscovery('http://unreachable.local:9999', undefined, 1000);
+    const discovery = new ComputeCapabilityDiscovery(
+      'http://unreachable.local:9999',
+      undefined,
+      1000,
+    );
     const report = await discovery.health();
 
     expect(report.available).toBe(false);
@@ -23,7 +34,11 @@ describe('Compute Capability Discovery', { timeout: 10000 }, () => {
   });
 
   it('does not fabricate capabilities', async () => {
-    const discovery = new ComputeCapabilityDiscovery('http://unreachable.local:9999', undefined, 1000);
+    const discovery = new ComputeCapabilityDiscovery(
+      'http://unreachable.local:9999',
+      undefined,
+      1000,
+    );
     const report = await discovery.fullReadinessCheck();
 
     // Must report exactly what was observed
@@ -35,7 +50,7 @@ describe('Compute Capability Discovery', { timeout: 10000 }, () => {
 
 describe('Compute Readiness Persistence', () => {
   it('persists and retrieves readiness state', async () => {
-    const state = openFeltState();
+    const state = openFeltState({ path: statePath() });
     const store = new ComputeReadinessStore(state.db);
 
     const report: ComputeReadinessReport = {
@@ -73,21 +88,29 @@ describe('Compute Readiness Persistence', () => {
 
   it('survives restart with durable FeltDB state', async () => {
     // Simulate a restart by opening the same state twice
-    const state1 = openFeltState();
+    const path = statePath();
+    const state1 = openFeltState({ path });
     const store1 = new ComputeReadinessStore(state1.db);
 
     const report: ComputeReadinessReport = {
       available: true,
       protocol: 'compute.remote@1',
       version: '0.1.17',
-      runtimes: [{ runtime: 'node', status: 'available', version: '24.18.0', source: 'compute-distribution' }],
+      runtimes: [
+        {
+          runtime: 'node',
+          status: 'available',
+          version: '24.18.0',
+          source: 'compute-distribution',
+        },
+      ],
     };
 
     await store1.update(report);
     state1.close();
 
     // "Restart" - open state again
-    const state2 = openFeltState();
+    const state2 = openFeltState({ path });
     const store2 = new ComputeReadinessStore(state2.db);
 
     const retrieved = await store2.current();
@@ -98,14 +121,24 @@ describe('Compute Readiness Persistence', () => {
   });
 
   it('provides runtime query methods', async () => {
-    const state = openFeltState();
+    const state = openFeltState({ path: statePath() });
     const store = new ComputeReadinessStore(state.db);
 
     await store.update({
       available: true,
       runtimes: [
-        { runtime: 'node', status: 'available', version: '24.18.0', source: 'compute-distribution' },
-        { runtime: 'python', status: 'available', version: '3.13.15', source: 'compute-distribution' },
+        {
+          runtime: 'node',
+          status: 'available',
+          version: '24.18.0',
+          source: 'compute-distribution',
+        },
+        {
+          runtime: 'python',
+          status: 'available',
+          version: '3.13.15',
+          source: 'compute-distribution',
+        },
       ],
     });
 

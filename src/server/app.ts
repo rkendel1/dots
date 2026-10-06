@@ -193,7 +193,9 @@ export function createApp({
       tasks: await store.tasks(),
       memories: await store.memories(),
       mode: config.mode,
-      configured: configured(config),
+      configured: platform
+        ? (await platform.setup()).intelligence
+        : configured(config),
     }),
   );
   app.post('/api/tasks', async (c) => {
@@ -216,11 +218,9 @@ export function createApp({
     if (!(await store.settings()).researchAllowed)
       return c.json({ error: 'Research is disabled in Settings.' }, 403);
     if (platform) {
-      if (platform.setup().missing.length)
-        return c.json(
-          { error: `Setup required: ${platform.setup().missing.join(', ')}.` },
-          503,
-        );
+      const { missing } = await platform.setup();
+      if (missing.length)
+        return c.json({ error: `Setup required: ${missing.join(', ')}.` }, 503);
       if (!parsed.data.threadId)
         return c.json(
           { error: 'Select a conversation for this scheduled task.' },

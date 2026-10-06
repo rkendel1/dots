@@ -5,6 +5,10 @@ import { DotAgent } from '../src/server/dot-agent.js';
 import { completion } from './fixtures/model-stream.js';
 import { memoryStore } from './helpers/store.js';
 import { memoryWorkspace } from './helpers/workspace.js';
+import {
+  fixedIntelligence,
+  testPlatformConfig,
+} from './helpers/intelligence.js';
 import { pageReviewTool } from '../src/shared/page-review.js';
 
 const databases: Array<{ close(): void }> = [];
@@ -24,15 +28,8 @@ async function fixture() {
   const agent = new DotAgent(
     store,
     workspace,
-    {
-      intelligenceKey: 'fixture',
-      apiKey: 'fixture',
-      model: 'custom-model',
-      baseUrl: 'https://unused.invalid/v1',
-      runtimeUrl: '',
-      voiceName: 'marin',
-      slackUsers: [],
-    },
+    testPlatformConfig,
+    fixedIntelligence(),
     dot.id,
   );
   const input: RunAgentInput = {

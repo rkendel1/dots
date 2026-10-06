@@ -30,9 +30,9 @@ export class VoiceService {
     return call;
   }
   async begin(threadId: string, sdp: string, signal: AbortSignal) {
-    this.platform.requireReady();
+    await this.platform.requireReady();
     await this.platform.workspace.requireThread(threadId);
-    if (!this.platform.setup().voice)
+    if (!(await this.platform.setup()).voice)
       throw new Error('Voice setup required: VOICE_API_KEY and VOICE_MODEL.');
     if ((await this.platform.store.settings()).paused)
       throw new Error('Dot is paused.');

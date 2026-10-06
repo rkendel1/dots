@@ -27,7 +27,7 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       spaces: await platform.workspace.spaces(),
       dots: await platform.workspace.dots(),
       conversations: await platform.workspace.conversations(),
-      setup: platform.setup(),
+      setup: await platform.setup(),
       calls: await platform.workspace.calls(),
     }),
   );
@@ -132,11 +132,9 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       .safeParse(await c.req.json());
     if (!data.success)
       return c.json({ error: 'Select a Dot and a conversation title.' }, 400);
-    if (platform.setup().missing.length)
-      return c.json(
-        { error: `Setup required: ${platform.setup().missing.join(', ')}.` },
-        503,
-      );
+    const { missing } = await platform.setup();
+    if (missing.length)
+      return c.json({ error: `Setup required: ${missing.join(', ')}.` }, 503);
     return c.json(
       await platform.createConversation(data.data.dotId, data.data.title),
       201,

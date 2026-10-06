@@ -60,6 +60,10 @@ export const RUNTIME_COLLECTIONS = [
   'captures',
   'computer_permissions',
   'computer_audit',
+  'compute_readiness',
+  'configurations',
+  'conversation_runs',
+  'conversation_messages',
 ] as const;
 
 export type RuntimeCollection = (typeof RUNTIME_COLLECTIONS)[number];

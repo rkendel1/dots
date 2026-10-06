@@ -1,291 +1,264 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConfigurationService } from '../src/server/configuration.js';
-import {
-  fileStore,
-  memoryStore,
-  type OpenStore,
-} from './helpers/store.js';
+import { configurationRoutes } from '../src/server/configuration-routes.js';
+import { EnvironmentCredentials } from '../src/server/intelligence.js';
+import { fileStore, memoryStore, type OpenStore } from './helpers/store.js';
 import type { PlatformConfig } from '../src/server/platform-config.js';
 
+const SECRET = 'sk-test-SECRET-VALUE-0123456789';
 const handles: OpenStore[] = [];
 const dirs: string[] = [];
 
-function openConfig(ownerId: string = 'test-owner') {
+const env = { ANTHROPIC_API_KEY: SECRET, OPENAI_API_KEY: SECRET };
+const credentials = () => new EnvironmentCredentials(env);
+
+function openConfig(ownerId = 'test-owner', bootstrap = {}) {
   const handle = memoryStore();
   handles.push(handle);
-  return new ConfigurationService(handle.state.db, ownerId);
+  return new ConfigurationService(
+    handle.state.db,
+    ownerId,
+    credentials(),
+    bootstrap,
+  );
 }
 
-function durableConfig(ownerId: string = 'test-owner') {
+function durableDir() {
   const dir = mkdtempSync(join(tmpdir(), 'opendots-config-'));
   dirs.push(dir);
-  const handle = fileStore(join(dir, 'state'));
-  handles.push(handle);
-  return { config: new ConfigurationService(handle.state.db, ownerId), handle, dir };
+  return dir;
 }
 
-function reopenConfig(dir: string, ownerId: string = 'test-owner') {
+function openAt(dir: string, ownerId = 'test-owner') {
   const handle = fileStore(join(dir, 'state'));
   handles.push(handle);
-  return new ConfigurationService(handle.state.db, ownerId);
+  return {
+    service: new ConfigurationService(
+      handle.state.db,
+      ownerId,
+      credentials(),
+      {},
+    ),
+    handle,
+  };
 }
 
-const baseConfig: PlatformConfig = {
-  intelligenceKey: 'test-key',
-  apiKey: 'test-openai-key',
-  model: 'gpt-4',
-  baseUrl: 'https://api.openai.com/v1',
+const platformConfig: PlatformConfig = {
   voiceName: 'marin',
-  slackUsers: [],
   runtimeUrl: 'http://localhost:4310/api/copilotkit',
 };
 
+/** Every file under `dir`, concatenated, so a test can grep durable state. */
+function rawState(dir: string): string {
+  let out = '';
+  for (const name of readdirSync(dir)) {
+    const path = join(dir, name);
+    out += statSync(path).isDirectory()
+      ? rawState(path)
+      : readFileSync(path, 'latin1');
+  }
+  return out;
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const handle of handles.splice(0)) handle.close();
   for (const dir of dirs.splice(0))
     rmSync(dir, { recursive: true, force: true });
 });
 
-describe('Configuration Service', () => {
-  describe('getConfiguration', () => {
-    it('returns setup complete when required fields are configured', async () => {
-      const service = openConfig();
-      const config = await service.getConfiguration(baseConfig);
+describe('Intelligence configuration', () => {
+  it('is incomplete until a provider and model are saved', async () => {
+    const config = await openConfig().getConfiguration(platformConfig);
+    expect(config.setupComplete).toBe(false);
+    expect(
+      config.requirements.find((r) => r.id === 'intelligence')?.configured,
+    ).toBe(false);
+  });
 
-      expect(config.setupComplete).toBe(true);
-      expect(config.sections.intelligence.apiKey.configured).toBe(true);
+  it('becomes complete from Setup alone, without any model setting in the environment', async () => {
+    const service = openConfig();
+    await service.saveConfiguration({
+      intelligence: { provider: 'anthropic', model: 'claude-haiku-4-5' },
     });
-
-    it('returns setup incomplete when secrets are missing', async () => {
-      const service = openConfig();
-      const config = await service.getConfiguration({
-        ...baseConfig,
-        intelligenceKey: undefined,
-      });
-
-      expect(config.setupComplete).toBe(false);
-    });
-
-    it('never returns secret values in response', async () => {
-      const service = openConfig();
-      const config = await service.getConfiguration(baseConfig);
-
-      // Secret status should show configured but not the value
-      expect(config.sections.intelligence.apiKey).toEqual({
-        configured: true,
-        source: 'environment',
-      });
-      // Should not have a value property for secrets
-      expect('value' in config.sections.intelligence.apiKey).toBe(false);
-    });
-
-    it('tracks required vs optional requirements', async () => {
-      const service = openConfig();
-      const config = await service.getConfiguration(baseConfig);
-
-      const required = config.requirements.filter((r) => r.required);
-      const optional = config.requirements.filter((r) => !r.required);
-
-      expect(required.length).toBeGreaterThan(0);
-      expect(optional.length).toBeGreaterThan(0);
-
-      // Core requirements should be required
-      const coreReq = required.find((r) => r.id === 'intelligence_api_key');
-      expect(coreReq).toBeDefined();
-
-      // Optional integrations should be optional
-      const slackReq = optional.find((r) => r.id === 'slack');
-      expect(slackReq).toBeDefined();
-    });
-
-    it('does not require optional integrations for setup completion', async () => {
-      const service = openConfig();
-      const incompleteConfig: PlatformConfig = {
-        ...baseConfig,
-        voiceKey: undefined,
-        slackChannel: undefined,
-        computerSupervisorUrl: undefined,
-      };
-
-      const config = await service.getConfiguration(incompleteConfig);
-      expect(config.setupComplete).toBe(true);
+    const config = await service.getConfiguration(platformConfig);
+    expect(config.setupComplete).toBe(true);
+    expect(config.sections.intelligence).toMatchObject({
+      configured: true,
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5',
+      credentialVariable: 'ANTHROPIC_API_KEY',
+      apiKey: { configured: true },
     });
   });
 
-  describe('saveConfiguration', () => {
-    it('persists non-secret configuration to FeltDB', async () => {
-      const service = openConfig();
-
-      await service.saveConfiguration({
-        intelligence: { model: 'gpt-4-turbo' },
-      });
-
-      const config = await service.getConfiguration(baseConfig);
-      expect(config.sections.intelligence.model).toBe('gpt-4-turbo');
+  it('lets saved Setup values override environment bootstrap values field by field', async () => {
+    const service = openConfig('owner', {
+      provider: 'openai',
+      model: 'env-model',
+      baseUrl: 'https://env.invalid/v1',
     });
+    expect(await service.savedIntelligenceSettings()).toBeUndefined();
+    await service.saveConfiguration({ intelligence: { model: 'setup-model' } });
+    const config = await service.getConfiguration(platformConfig);
+    // Saved model wins; provider still comes from bootstrap because Setup left it unset.
+    expect(config.sections.intelligence.model).toBe('setup-model');
+    expect(config.sections.intelligence.provider).toBe('openai');
+  });
 
-    it('preserves configuration across restarts', async () => {
-      const { config, handle, dir } = durableConfig();
-
-      await config.saveConfiguration({
-        voice: { model: 'tts-1', name: 'echo' },
-      });
-
-      handle.close();
-
-      const reopened = reopenConfig(dir);
-      const readConfig = await reopened.getConfiguration(baseConfig);
-      expect(readConfig.sections.voice.model).toBe('tts-1');
-      expect(readConfig.sections.voice.name).toBe('echo');
+  it('reports a missing provider credential by variable name only', async () => {
+    const handle = memoryStore();
+    handles.push(handle);
+    const service = new ConfigurationService(
+      handle.state.db,
+      'owner',
+      new EnvironmentCredentials({
+        INTELLIGENCE_API_KEY: 'copilotkit-hosted-key',
+      }),
+      {},
+    );
+    await service.saveConfiguration({
+      intelligence: { provider: 'anthropic', model: 'claude-haiku-4-5' },
     });
+    const config = await service.getConfiguration(platformConfig);
+    expect(config.setupComplete).toBe(false);
+    expect(
+      config.requirements.find((r) => r.id === 'intelligence_credential'),
+    ).toMatchObject({ configured: false, label: 'Anthropic credential' });
+  });
 
-    it('merges new configuration with existing', async () => {
-      const service = openConfig();
-
-      await service.saveConfiguration({
-        intelligence: { model: 'gpt-4' },
-      });
-
-      await service.saveConfiguration({
-        voice: { model: 'tts-1' },
-      });
-
-      const config = await service.getConfiguration(baseConfig);
-      expect(config.sections.intelligence.model).toBe('gpt-4');
-      expect(config.sections.voice.model).toBe('tts-1');
+  it('persists configuration across a restart', async () => {
+    const dir = durableDir();
+    const first = openAt(dir);
+    await first.service.saveConfiguration({
+      intelligence: { provider: 'openai', model: 'gpt-4.1-mini' },
     });
-
-    it('updates existing configuration fields', async () => {
-      const service = openConfig();
-
-      await service.saveConfiguration({
-        intelligence: { model: 'gpt-4' },
-      });
-
-      await service.saveConfiguration({
-        intelligence: { model: 'gpt-3.5-turbo' },
-      });
-
-      const config = await service.getConfiguration(baseConfig);
-      expect(config.sections.intelligence.model).toBe('gpt-3.5-turbo');
-    });
-
-    it('separates configuration by owner', async () => {
-      const service1 = openConfig('owner1');
-      const service2 = openConfig('owner2');
-
-      await service1.saveConfiguration({
-        intelligence: { model: 'gpt-4' },
-      });
-
-      await service2.saveConfiguration({
-        intelligence: { model: 'gpt-3.5' },
-      });
-
-      const config1 = await service1.getConfiguration(baseConfig);
-      const config2 = await service2.getConfiguration(baseConfig);
-
-      expect(config1.sections.intelligence.model).toBe('gpt-4');
-      expect(config2.sections.intelligence.model).toBe('gpt-3.5');
-    });
-
-    it('tracks update timestamps', async () => {
-      const service = openConfig();
-      const before = Date.now();
-
-      await service.saveConfiguration({
-        intelligence: { model: 'gpt-4' },
-      });
-
-      const after = Date.now();
-      const config = await service.getConfiguration(baseConfig);
-
-      // Can't easily access the stored config to check updatedAt,
-      // but we can verify it doesn't error
-      expect(config.sections.intelligence.model).toBe('gpt-4');
+    first.handle.close();
+    const second = openAt(dir);
+    expect(await second.service.savedIntelligenceSettings()).toEqual({
+      provider: 'openai',
+      model: 'gpt-4.1-mini',
+      baseUrl: undefined,
     });
   });
 
-  describe('secret status indicators', () => {
-    it('shows configured for environment secrets', async () => {
-      const service = openConfig();
-      const config = await service.getConfiguration(baseConfig);
-
-      expect(config.sections.intelligence.apiKey.configured).toBe(true);
-      expect(config.sections.intelligence.apiKey.source).toBe('environment');
+  it("keeps each owner's configuration separate", async () => {
+    const handle = memoryStore();
+    handles.push(handle);
+    const a = new ConfigurationService(
+      handle.state.db,
+      'owner-a',
+      credentials(),
+      {},
+    );
+    const b = new ConfigurationService(
+      handle.state.db,
+      'owner-b',
+      credentials(),
+      {},
+    );
+    await a.saveConfiguration({
+      intelligence: { provider: 'openai', model: 'a-model' },
     });
+    expect(
+      (await a.getConfiguration(platformConfig)).sections.intelligence.model,
+    ).toBe('a-model');
+    expect(
+      (await b.getConfiguration(platformConfig)).sections.intelligence.model,
+    ).toBeUndefined();
+  });
+});
 
-    it('shows not configured for missing secrets', async () => {
-      const service = openConfig();
-      const config = await service.getConfiguration({
-        ...baseConfig,
-        intelligenceKey: undefined,
-      });
+describe('credential custody', () => {
+  async function routes(service: ConfigurationService) {
+    return configurationRoutes(service, platformConfig);
+  }
 
-      expect(config.sections.intelligence.apiKey.configured).toBe(false);
-      expect(config.sections.intelligence.apiKey.source).toBeUndefined();
+  it('never returns a credential from the configuration or capability APIs', async () => {
+    const service = openConfig();
+    await service.saveConfiguration({
+      intelligence: { provider: 'openai', model: 'gpt-4.1-mini' },
     });
-
-    it('never includes secret values in status', async () => {
-      const service = openConfig();
-      const config = await service.getConfiguration({
-        ...baseConfig,
-        intelligenceKey: 'super-secret-key-12345',
-      });
-
-      // Status should only have configured and source, not the secret
-      const status = config.sections.intelligence.apiKey;
-      expect(status).not.toHaveProperty('value');
-      expect(Object.keys(status)).toEqual(
-        expect.arrayContaining(['configured', 'source']),
-      );
-    });
+    const app = await routes(service);
+    for (const path of ['/configuration', '/setup/capabilities']) {
+      const body = await (await app.request(path)).text();
+      expect(body).not.toContain(SECRET);
+    }
   });
 
-  describe('configuration requirements', () => {
-    it('includes all required sections in requirements', async () => {
-      const service = openConfig();
-      const config = await service.getConfiguration(baseConfig);
-
-      const requiredIds = config.requirements
-        .filter((r) => r.required)
-        .map((r) => r.id);
-
-      expect(requiredIds).toContain('intelligence_api_key');
-      expect(requiredIds).toContain('openai_api_key');
-      expect(requiredIds).toContain('openai_model');
+  it('rejects a configuration write that carries a credential', async () => {
+    const service = openConfig();
+    const response = await (
+      await routes(service)
+    ).request('/configuration', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        intelligence: { provider: 'openai', model: 'm', apiKey: SECRET },
+      }),
     });
+    expect(response.status).toBe(400);
+    expect(await service.savedIntelligenceSettings()).toBeUndefined();
+  });
 
-    it('marks incomplete requirements correctly', async () => {
-      const service = openConfig();
-      const config = await service.getConfiguration({
-        ...baseConfig,
-        model: undefined,
+  it('stores no credential in durable configuration', async () => {
+    const dir = durableDir();
+    const { service, handle } = openAt(dir);
+    await service.saveConfiguration({
+      intelligence: { provider: 'openai', model: 'gpt-4.1-mini' },
+    });
+    handle.close();
+    const raw = rawState(dir);
+    expect(raw).toContain('gpt-4.1-mini');
+    expect(raw).not.toContain(SECRET);
+  });
+
+  it('scrubs a plaintext credential written by an earlier build, without logging it', async () => {
+    const dir = durableDir();
+    const first = openAt(dir);
+    // Simulate the earlier build's record shape directly.
+    await first.handle.state.db.transaction((tx) => {
+      tx.collection('configurations').set('legacy', {
+        id: 'legacy',
+        ownerId: 'test-owner',
+        intelligence: {
+          provider: 'anthropic',
+          apiKey: SECRET,
+          model: 'claude-haiku-4-5',
+        },
+        savedAt: 1,
+        updatedAt: 1,
+        __version: 1,
       });
-
-      const modelReq = config.requirements.find((r) => r.id === 'openai_model');
-      expect(modelReq?.configured).toBe(false);
-      expect(modelReq?.source).toBe('missing');
     });
-
-    it('handles multiple owners separately', async () => {
-      const service1 = openConfig('owner1');
-      const service2 = openConfig('owner2');
-
-      const config1 = await service1.getConfiguration(baseConfig);
-      const config2 = await service2.getConfiguration({
-        ...baseConfig,
-        model: undefined,
-      });
-
-      const req1 = config1.requirements.find((r) => r.id === 'openai_model');
-      const req2 = config2.requirements.find((r) => r.id === 'openai_model');
-
-      expect(req1?.configured).toBe(true);
-      expect(req2?.configured).toBe(false);
+    const logs = [
+      vi.spyOn(console, 'log'),
+      vi.spyOn(console, 'warn'),
+      vi.spyOn(console, 'error'),
+    ];
+    expect(await first.service.scrubPlaintextCredentials()).toBe(1);
+    expect(await first.service.scrubPlaintextCredentials()).toBe(0);
+    expect(await first.service.savedIntelligenceSettings()).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5',
     });
+    for (const log of logs)
+      expect(JSON.stringify(log.mock.calls)).not.toContain(SECRET);
+    first.handle.close();
+    // The current value is gone; FeltDB's own history is outside this check.
+    const reopened = openAt(dir);
+    const records = await reopened.handle.state.db
+      .collection('configurations')
+      .all();
+    expect(JSON.stringify(records)).not.toContain(SECRET);
   });
 });

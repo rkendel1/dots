@@ -10,7 +10,9 @@ import type { ConfigurationReadModel } from '../src/shared/types.js';
 import type { ComputeReadinessRecord } from '../src/server/compute-readiness-store.js';
 
 // Mock configuration with minimal setup
-function mockConfiguration(overrides?: Partial<ConfigurationReadModel>): ConfigurationReadModel {
+function mockConfiguration(
+  overrides?: Partial<ConfigurationReadModel>,
+): ConfigurationReadModel {
   return {
     setupComplete: false,
     sections: {
@@ -21,8 +23,6 @@ function mockConfiguration(overrides?: Partial<ConfigurationReadModel>): Configu
       intelligence: {
         configured: false,
         provider: undefined,
-        apiUrl: undefined,
-        wsUrl: undefined,
         apiKey: { configured: false },
         model: undefined,
         baseUrl: undefined,
@@ -37,12 +37,6 @@ function mockConfiguration(overrides?: Partial<ConfigurationReadModel>): Configu
         model: undefined,
         name: undefined,
         apiKey: { configured: false },
-      },
-      slack: {
-        channelName: undefined,
-        teamId: undefined,
-        userIds: [],
-        dotId: undefined,
       },
       computers: {
         supervisorToken: { configured: false },
@@ -85,8 +79,6 @@ describe('Capability Status', () => {
         intelligence: {
           configured: true,
           provider: 'openai',
-          apiUrl: undefined,
-          wsUrl: undefined,
           apiKey: { configured: true },
           model: 'gpt-4',
           baseUrl: undefined,
@@ -135,8 +127,18 @@ describe('Capability Status', () => {
       protocol: 'compute.remote@1',
       version: '0.1.17',
       runtimes: [
-        { runtime: 'shell', status: 'installed', version: '1.0', source: 'host' },
-        { runtime: 'node', status: 'available', version: '24.0', source: 'compute' },
+        {
+          runtime: 'shell',
+          status: 'installed',
+          version: '1.0',
+          source: 'host',
+        },
+        {
+          runtime: 'node',
+          status: 'available',
+          version: '24.0',
+          source: 'compute',
+        },
       ],
       checkedAt: Date.now(),
     };
@@ -197,8 +199,6 @@ describe('Capability Status', () => {
         intelligence: {
           configured: true,
           provider: 'openai',
-          apiUrl: undefined,
-          wsUrl: undefined,
           apiKey: { configured: true },
           model: 'gpt-4',
           baseUrl: undefined,
@@ -221,28 +221,6 @@ describe('Capability Status', () => {
     });
   });
 
-  it('reports Slack as ready when channel and team are configured', () => {
-    const config = mockConfiguration({
-      sections: {
-        ...mockConfiguration().sections,
-        slack: {
-          channelName: '#opendots',
-          teamId: 'T123456',
-          userIds: ['U123456'],
-          dotId: 'dot-123',
-        },
-      },
-    });
-
-    const capabilities = buildCapabilityStatus(config, undefined);
-    expect(capabilities.slack).toMatchObject({
-      required: false,
-      status: 'ready',
-      channel: '#opendots',
-      team: 'T123456',
-    });
-  });
-
   it('never exposes secret values, only status', () => {
     const config = mockConfiguration({
       sections: {
@@ -250,8 +228,6 @@ describe('Capability Status', () => {
         intelligence: {
           configured: true,
           provider: 'openai',
-          apiUrl: undefined,
-          wsUrl: undefined,
           apiKey: { configured: true },
           model: 'gpt-4',
           baseUrl: undefined,

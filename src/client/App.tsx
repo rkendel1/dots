@@ -2,6 +2,7 @@ import { openPageLink } from './page-navigation';
 import { SpaceNav } from './SpaceNav';
 import { SpaceWorkspace } from './SpaceWorkspace';
 import { useCallback, useEffect, useState, useRef } from 'react';
+import { CopilotKitProvider } from '@copilotkit/react-core/v2';
 import {
   ArrowUp,
   ArrowUpRight,
@@ -32,7 +33,7 @@ import type {
   State,
   WorkspaceState,
 } from '../shared/types';
-import { api, ApiError, setToken } from './api';
+import { api, ApiError, authHeaders, setToken } from './api';
 import { Mascot } from './Mascot';
 import { Chat } from './Chat';
 import { ThreadList } from './ThreadList';
@@ -722,12 +723,15 @@ export function App() {
                   </div>
                   <div className="connection-note">
                     <span
-                      className={`online-dot ${workspace.setup.slack === 'online' ? '' : 'off'}`}
+                      className={`online-dot ${workspace.setup.intelligence ? '' : 'off'}`}
                     />
-                    Slack · {workspace.setup.slack.replaceAll('_', ' ')}
+                    Intelligence ·{' '}
+                    {workspace.setup.intelligence
+                      ? (workspace.setup.intelligenceProvider ?? 'ready')
+                      : 'not configured'}
                     <button
                       className="text-button"
-                      onClick={() => setDialog({ type: 'settings' })}
+                      onClick={() => setShowSetupDialog(true)}
                     >
                       Setup details
                     </button>
@@ -986,7 +990,17 @@ export function App() {
   );
   return (
     <>
-      {content}
+      {configured ? (
+        <CopilotKitProvider
+          runtimeUrl="/api/copilotkit"
+          headers={authHeaders()}
+          enableInspector={false}
+        >
+          {content}
+        </CopilotKitProvider>
+      ) : (
+        content
+      )}
       <SetupDialog
         isOpen={showSetupDialog}
         onComplete={() => {

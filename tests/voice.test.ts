@@ -22,12 +22,10 @@ async function fixture() {
     workspace.state.close();
   });
   const config: PlatformConfig = {
-    baseUrl: 'https://example.com',
     voiceKey: 'test-secret',
     voiceModel: 'voice-model',
     voiceName: 'marin',
     runtimeUrl: '',
-    slackUsers: [],
   };
   const turn = vi.fn(
     async (_thread: string, _prompt: string, _signal: AbortSignal) =>
@@ -48,13 +46,11 @@ async function fixture() {
       config,
       turn,
       history,
-      requireReady() {},
-      setup: () => ({
+      requireReady: async () => {},
+      setup: async () => ({
         voice: true,
         intelligence: true,
-        model: true,
         browser: false,
-        slack: 'not_configured',
         missing: [],
       }),
     },

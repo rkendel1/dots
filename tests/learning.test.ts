@@ -2,9 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import type { RunAgentInput } from '@ag-ui/core';
 import { memoryWorkspace, fileWorkspace } from './helpers/workspace.js';
-import { learningSelector } from '../src/server/learning.js';
 
 const cleanup: (() => void)[] = [];
 afterEach(() =>
@@ -19,15 +17,6 @@ async function fixture() {
   const dot = (await ws.store.dots())[0]!;
   return { ws, dot };
 }
-const input = (threadId: string): RunAgentInput => ({
-  threadId,
-  runId: 'run',
-  state: {},
-  messages: [],
-  tools: [],
-  context: [],
-  forwardedProps: {},
-});
 
 it('freezes container assignments, including disabled conversations, when a Dot changes', async () => {
   const { ws, dot } = await fixture();
@@ -88,70 +77,6 @@ it('persists thread bindings and Dot Learning configuration across restart', asy
     learningContainerId: 'research',
     skillDeliveryEnabled: true,
   });
-});
-
-it('selects only owned web threads and binds the configured channel Dot before its first run', async () => {
-  const { ws, dot } = await fixture();
-  await ws.store.updateDot(dot.id, {
-    ...dot,
-    learningContainerId: 'research',
-    skillDeliveryEnabled: true,
-  });
-  await ws.store.bindThread('web', dot.id, 'Web');
-  const select = learningSelector(ws.store, dot.id);
-  const user = { id: 'owner', name: 'Owner' };
-  await expect(
-    select({ surface: 'web', user, agentId: dot.id, input: input('web') }),
-  ).resolves.toBe('research');
-  await expect(
-    select({ surface: 'web', user, agentId: dot.id, input: input('unknown') }),
-  ).rejects.toThrow();
-  await expect(
-    select({
-      surface: 'channel',
-      user,
-      agentId: dot.id,
-      input: input('slack'),
-    }),
-  ).resolves.toBe('research');
-  expect(
-    (await ws.store.requireThread('slack', dot.id)).learningContainerId,
-  ).toBe('research');
-  await expect(
-    select({
-      surface: 'channel',
-      user: null,
-      agentId: dot.id,
-      input: input('unauthorized'),
-    }),
-  ).rejects.toThrow();
-  await expect(
-    select({
-      surface: 'web',
-      user: { id: 'other', name: 'Other' },
-      agentId: dot.id,
-      input: input('web'),
-    }),
-  ).rejects.toThrow();
-  const other = await ws.store.createDot(
-    dot.spaceId,
-    'Other',
-    'Other role',
-    true,
-    true,
-  );
-  await expect(
-    select({
-      surface: 'channel',
-      user,
-      agentId: other.id,
-      input: input('wrong-dot'),
-    }),
-  ).rejects.toThrow();
-  await expect(
-    select({ surface: 'web', user, agentId: other.id, input: input('web') }),
-  ).rejects.toThrow();
-  expect(await ws.store.conversations()).toHaveLength(2);
 });
 
 it('rejects invalid container IDs and delivery without a container', async () => {

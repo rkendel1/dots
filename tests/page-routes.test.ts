@@ -3,6 +3,10 @@ import { memoryWorkspace } from './helpers/workspace.js';
 import { memoryStore } from './helpers/store.js';
 import { Platform } from '../src/server/platform.js';
 import { Runner } from '../src/server/runner.js';
+import {
+  fixedIntelligence,
+  testPlatformConfig,
+} from './helpers/intelligence.js';
 import { createApp } from '../src/server/app.js';
 const cleanup: (() => void)[] = [];
 afterEach(() => cleanup.splice(0).forEach((fn) => fn()));
@@ -16,12 +20,12 @@ async function fixture(ownerToken?: string) {
     opened.state.close();
   });
   const config = { mode: 'live' as const, baseUrl: 'https://example.com' };
-  const platform = await Platform.create(store, ws, {
-    baseUrl: config.baseUrl,
-    voiceName: 'marin',
-    slackUsers: [],
-    runtimeUrl: '',
-  });
+  const platform = await Platform.create(
+    store,
+    ws,
+    testPlatformConfig,
+    fixedIntelligence({}),
+  );
   return {
     ws,
     app: createApp({

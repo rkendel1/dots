@@ -49,7 +49,9 @@ export function configurationRoutes(
     try {
       const configuration = await configService.getConfiguration(config);
       const computeReadiness = db ? new ComputeReadinessStore(db) : null;
-      const computeState = computeReadiness ? await computeReadiness.current() : undefined;
+      const computeState = computeReadiness
+        ? await computeReadiness.current()
+        : undefined;
 
       const capabilities = buildCapabilityStatus(configuration, computeState);
       return c.json(capabilities);
@@ -68,8 +70,8 @@ export function configurationRoutes(
 
   /**
    * PUT /api/configuration
-   * Updates managed (non-secret) configuration.
-   * Environment-provided values take precedence and cannot be overridden.
+   * Updates durable, non-secret configuration. Saved Intelligence settings take
+   * precedence over environment bootstrap values on the next request.
    */
   app.put('/configuration', async (c) => {
     try {
@@ -77,11 +79,13 @@ export function configurationRoutes(
         .object({
           intelligence: z
             .object({
-              apiUrl: z.string().url().optional(),
-              wsUrl: z.string().url().optional(),
+              provider: z.enum(['anthropic', 'openai']).optional(),
               model: z.string().min(1).max(100).optional(),
               baseUrl: z.string().url().optional(),
             })
+            // A credential field is rejected, not ignored: keys never enter
+            // durable configuration.
+            .strict()
             .optional(),
           browser: z
             .object({
@@ -94,14 +98,6 @@ export function configurationRoutes(
             .object({
               model: z.string().min(1).max(100).optional(),
               name: z.string().min(1).max(100).optional(),
-            })
-            .optional(),
-          slack: z
-            .object({
-              channelName: z.string().min(1).max(200).optional(),
-              teamId: z.string().min(1).max(100).optional(),
-              userIds: z.array(z.string().min(1)).optional(),
-              dotId: z.string().min(1).optional(),
             })
             .optional(),
           computers: z
@@ -120,13 +116,14 @@ export function configurationRoutes(
       if (!data.success) {
         return c.json(
           {
-            error: 'Invalid configuration format. Please check the fields and try again.',
+            error:
+              'Invalid configuration format. Please check the fields and try again.',
           },
           400,
         );
       }
 
-      const updated = await configService.saveConfiguration(data.data);
+      await configService.saveConfiguration(data.data);
       const readModel = await configService.getConfiguration(config);
 
       return c.json(readModel, 200);

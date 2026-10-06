@@ -309,10 +309,9 @@ export interface CallReceipt {
  */
 export interface SetupStatus {
   intelligence: boolean;
-  intelligenceProvider?: 'openai' | 'anthropic' | 'other';
+  intelligenceProvider?: 'openai' | 'anthropic';
   browser: boolean;
   voice: boolean;
-  slack: string;
   missing: string[];
 }
 
@@ -335,10 +334,11 @@ export interface ConfigurationField<T = string> {
 /** Intelligence configuration domain model. */
 export interface IntelligenceConfiguration {
   configured: boolean;
-  provider?: 'openai' | 'anthropic' | 'other';
-  apiUrl?: string;
-  wsUrl?: string;
+  provider?: 'openai' | 'anthropic';
+  /** Status only; the credential itself never leaves the server. */
   apiKey: SecretStatus;
+  /** The environment variable that holds the selected provider's credential. */
+  credentialVariable?: string;
   model?: string;
   baseUrl?: string;
 }
@@ -356,14 +356,6 @@ export interface VoiceConfiguration {
   model?: string;
   name?: string;
   apiKey: SecretStatus;
-}
-
-/** Slack configuration domain model. */
-export interface SlackConfiguration {
-  channelName?: string;
-  teamId?: string;
-  userIds: string[];
-  dotId?: string;
 }
 
 /** Computer configuration domain model. */
@@ -401,7 +393,6 @@ export interface ConfigurationReadModel {
     intelligence: IntelligenceConfiguration;
     browser: BrowserConfiguration;
     voice: VoiceConfiguration;
-    slack: SlackConfiguration;
     computers: ComputerConfiguration;
     compute: ComputeConfiguration;
   };
@@ -411,7 +402,8 @@ export interface ConfigurationReadModel {
 /** Configuration requirement for setup completion. */
 export interface ConfigurationRequirement {
   id: string;
-  section: 'core' | 'intelligence' | 'browser' | 'voice' | 'slack' | 'computers' | 'compute';
+  section:
+    'core' | 'intelligence' | 'browser' | 'voice' | 'computers' | 'compute';
   label: string;
   required: boolean;
   configured: boolean;
@@ -462,27 +454,20 @@ export interface VoiceCapabilityStatus extends CapabilityBase {
   credentialConfigured: boolean;
 }
 
-export interface SlackCapabilityStatus extends CapabilityBase {
-  required: false;
-  channel?: string;
-  team?: string;
-}
-
 export interface SetupCapabilitiesModel {
   intelligence: IntelligenceCapabilityStatus;
   computers: ComputeCapabilityStatus;
   browser: BrowserCapabilityStatus;
   voice: VoiceCapabilityStatus;
-  slack: SlackCapabilityStatus;
 }
 
 /** Non-secret configuration that can be persisted. */
 export interface ManagedConfiguration {
   id: string;
   ownerId: string;
+  /** Non-secret Intelligence settings. Provider credentials are never stored here. */
   intelligence?: {
-    apiUrl?: string;
-    wsUrl?: string;
+    provider?: 'anthropic' | 'openai';
     model?: string;
     baseUrl?: string;
   };
@@ -494,12 +479,6 @@ export interface ManagedConfiguration {
   voice?: {
     model?: string;
     name?: string;
-  };
-  slack?: {
-    channelName?: string;
-    teamId?: string;
-    userIds?: string[];
-    dotId?: string;
   };
   computers?: {
     namespace?: string;

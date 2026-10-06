@@ -1,6 +1,6 @@
 # Running the template
 
-OpenDots runs a React app and a Node server. The server stores pages, Space and Dot configuration, and thread bindings in FeltDB — its sole runtime persistence substrate — and connects to your configured conversation, model, and messaging services. SQLite is legacy: it is read only by the one-time migration command described in [STORE-FELTDB-PHASE7.md](STORE-FELTDB-PHASE7.md), and never by the running application.
+OpenDots runs a React app and a Node server. The server stores pages, Space and Dot configuration, Setup configuration, and conversations with their full message history in FeltDB — its sole runtime persistence substrate — and calls the model provider you configure. SQLite is legacy: it is read only by the one-time migration command described in [STORE-FELTDB-PHASE7.md](STORE-FELTDB-PHASE7.md), and never by the running application.
 
 ## Local development
 
@@ -23,23 +23,31 @@ npm start
 
 Open http://127.0.0.1:4310. Keep the server running for background work.
 
-## Conversation services
+## Intelligence and conversations
 
-Edit `.env` on the server and restart after changes:
+OpenDots is self-hosted: conversations and their messages are stored in FeltDB, and model calls go directly to the provider you choose. No CopilotKit hosted service or CopilotKit key is involved.
 
-| Variable                                      | Purpose                                                                      |
-| --------------------------------------------- | ---------------------------------------------------------------------------- |
-| `INTELLIGENCE_API_KEY`                        | Project credential for conversation persistence                              |
-| `INTELLIGENCE_API_URL`, `INTELLIGENCE_WS_URL` | Endpoint overrides for your Intelligence deployment                          |
-| `OPENAI_API_KEY`, `OPENAI_MODEL`              | Model credential and model identifier                                        |
-| `OPENAI_BASE_URL`                             | Compatible model API endpoint                                                |
-| `OWNER_ID`                                    | Stable identity used for this deployment's conversations                     |
-| `FELTDB_PATH`                                 | Durable state directory; defaults to `data/opendots-state`                   |
-| `FELTDB_NAMESPACE`                            | Collection namespace; defaults to the app identity declared in `feltdb.flow` |
-| `OWNER_TOKEN`                                 | Application access token; required for external bindings                     |
-| `APP_ORIGIN`                                  | Exact browser origin when using a proxy or custom domain                     |
+1. Open **Configure infrastructure** in the sidebar (or the Setup screen on first run).
+2. Choose a **provider** (Anthropic or OpenAI) and enter a **model**. Save. The next request uses them; no restart is needed.
+3. Put that provider's key in the server's `.env` and restart once:
 
-The model environment variable names follow the configured provider adapter. Provider credentials belong in `.env`, not client-side variables or source code. Conversation history lives in the configured Intelligence project; copying the FeltDB state directory alone does not back up that history.
+| Variable                                                               | Purpose                                                                      |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `ANTHROPIC_API_KEY`                                                    | Credential for the Anthropic provider                                        |
+| `OPENAI_API_KEY`                                                       | Credential for the OpenAI provider                                           |
+| `INTELLIGENCE_PROVIDER`, `INTELLIGENCE_MODEL`, `INTELLIGENCE_BASE_URL` | Optional bootstrap defaults for fields Setup has not saved                   |
+| `OPENAI_MODEL`, `OPENAI_BASE_URL`                                      | Legacy OpenAI bootstrap defaults                                             |
+| `OWNER_ID`                                                             | Stable identity that owns this deployment's conversations                    |
+| `FELTDB_PATH`                                                          | Durable state directory; defaults to `data/opendots-state`                   |
+| `FELTDB_NAMESPACE`                                                     | Collection namespace; defaults to the app identity declared in `feltdb.flow` |
+| `OWNER_TOKEN`                                                          | Application access token; required for external bindings                     |
+| `APP_ORIGIN`                                                           | Exact browser origin when using a proxy or custom domain                     |
+
+Precedence is deterministic: a value saved in Setup always wins; an environment bootstrap value only fills a field Setup has not saved, and a bootstrap model or base URL is only used for the provider it was written for.
+
+Provider keys never enter FeltDB, the Setup read model, any API response, or logs: OpenDots has no credential store, so keys come from the server environment only. Setup shows whether the selected provider's key is present, never its value. Backing up the FeltDB state directory backs up conversation history too.
+
+`INTELLIGENCE_API_KEY`, `INTELLIGENCE_API_URL`, and `INTELLIGENCE_WS_URL` (CopilotKit's hosted service) are no longer read.
 
 ## The application contract
 
@@ -68,11 +76,11 @@ Select a Space to open its page library. Search for a document, switch between g
 
 Page actions include creating subpages, moving a page within its Space, and editing Markdown source. Existing documents with unsupported visual-editor syntax stay in source mode to preserve their content. Manual editing works without conversation credentials.
 
-Open a page's chat and choose a specialist with access to that Space. Grant access from the Dot’s settings in the sidebar. The server creates or reuses a CopilotKit Thread for that page and specialist. The Dot receives the current saved page as context and can read, create, and edit pages in its authorized Spaces. The page conversation uses that page’s Space by default; other chats use the Dot’s default page destination. Save your manual edits before asking it to revise the document. Revision checks reject stale writes; a conflict keeps your local draft available for recovery. Failed saves stop automatic retries until you retry or resolve the conflict, so a disconnected session does not silently replace newer content.
+Open a page's chat and choose a specialist with access to that Space. Grant access from the Dot’s settings in the sidebar. The server creates or reuses a conversation for that page and specialist. The Dot receives the current saved page as context and can read, create, and edit pages in its authorized Spaces. The page conversation uses that page’s Space by default; other chats use the Dot’s default page destination. Save your manual edits before asking it to revise the document. Revision checks reject stale writes; a conflict keeps your local draft available for recovery. Failed saves stop automatic retries until you retry or resolve the conflict, so a disconnected session does not silently replace newer content.
 
 Use the conversation's save-to-page action to create a document from its saved text history. This requires a working conversation service. Pages retain a link to the source conversation, and page links in chat open the document workspace.
 
-Back up both storage layers: the FeltDB state directory (`FELTDB_PATH`) contains page content and thread bindings; the Intelligence project contains conversation history. The legacy `data/opendots.sqlite` file is a migration source only and is not part of either backup. The template does not include multi-user page sharing, realtime collaboration, file uploads, or arbitrary interactive embeds.
+Back up the FeltDB state directory (`FELTDB_PATH`): it contains page content, configuration, and conversation history. The legacy `data/opendots.sqlite` file is a migration source only and is not part of the backup. The template does not include multi-user page sharing, realtime collaboration, file uploads, or arbitrary interactive embeds.
 
 ## Browser tool
 
@@ -89,49 +97,9 @@ Use the same secret on the app and browser processes. Browser navigation is read
 
 For a separate browser, persistent files, and optional shell for each specialist, follow [Computer setup](COMPUTERS.md). This uses pinned OpenBot computer/supervisor services and per-Dot permissions. When computer services are configured, Dots use their computer tools in place of the read-only public-page tool; enable each Dot's required capabilities before use.
 
-## Slack
-
-OpenDots uses `@copilotkit/channels` with a managed Slack connection, following the runtime and channel pattern in [OpenTag](https://github.com/CopilotKit/OpenTag). The application declares the channel and its specialist agent; Intelligence manages the Slack adapter and delivery. You do not need a separate Slack webhook server or Socket Mode connection in OpenDots.
-
-### Create the managed channel
-
-Select the same Intelligence project used by this application, then create a uniquely named channel:
-
-```sh
-npx --yes copilotkit@latest project select
-npx --yes copilotkit@latest channels add --name opendots --display-name "OpenDots" --adapter slack --json
-```
-
-Follow the CLI's returned `nextAction` to create the Slack app from its generated manifest, supply credentials through the managed setup flow, and run its `resumeCommand`. A `blocked` response means a Slack-console step is still needed; a `failed` response must be resolved before continuing. Keep Socket Mode off. Install or reinstall the generated app in your workspace with its requested scopes. Use a distinct channel name for separate deployments so they do not compete for deliveries.
-
-See [OpenTag's setup guide](https://github.com/CopilotKit/OpenTag/blob/main/setup.md) for the Slack-console walkthrough. Slack bot tokens and signing secrets belong in the managed adapter configuration, not the browser or this application's `.env`.
-
-### Connect a specialist
-
-Configure the application server's `.env` alongside its Intelligence and model credentials:
-
-```dotenv
-SLACK_CHANNEL_NAME=opendots
-SLACK_TEAM_ID=T_REPLACE_WITH_WORKSPACE_ID
-SLACK_USER_IDS=U_REPLACE_WITH_YOUR_USER_ID
-SLACK_DOT_ID=REPLACE_WITH_DOT_ID
-```
-
-`SLACK_CHANNEL_NAME` must exactly match the managed channel name, not a Slack conversation name such as `#general`. OpenTag calls this setting `INTELLIGENCE_CHANNEL_NAME`; OpenDots uses `SLACK_CHANNEL_NAME`. `SLACK_TEAM_ID` and the comma-separated `SLACK_USER_IDS` restrict who may invoke the specialist. `SLACK_DOT_ID` selects an existing Dot; find IDs in the authenticated `/api/workspace` response. If omitted, it defaults to the initial Dot.
-
-Restart OpenDots after changing environment settings and inspect Slack status in Settings & setup. Channel activation must complete before trying a message. Mention the installed bot in a channel it can access; subsequent messages in that followed thread go to the same specialist. Unrelated threads, bot events, edits, deletions, and users outside the allowlist do not start agent runs. Editing a message to add a mention is not supported; send a new message instead.
-
-This template maps permitted Slack users to the single OpenDots owner. Replies are visible to the Slack conversation's audience, so choose the specialist's Space access and permitted tools accordingly. This is not a multi-user identity model.
-
-### Verify your deployment
-
-From an allowed user, mention the bot and verify a response in the same Slack thread. Reply in that thread and confirm continuity. Check that an unrelated thread and an unapproved user cannot invoke it. Pause the assistant in OpenDots and verify that a permitted request receives a paused notice. Check Settings & setup for channel connection failures.
-
-Local tests exercise channel behavior with fixtures. A live Slack mention/reply remains unverified until you provision the managed connection and model credentials. [Channels SDK documentation](https://github.com/CopilotKit/channels-sdk) describes extending the adapter and channel behavior.
-
 ## Calls
 
-The included speech adapter uses the Realtime API at `api.openai.com`. Set `VOICE_API_KEY` to a key with access to that API and `VOICE_MODEL` to a supported Realtime model (the local UI test used `gpt-realtime-2.1`); `VOICE_NAME` selects the voice. `OPENAI_BASE_URL` changes the compute model endpoint only, not speech. Calls use browser microphone access and WebRTC. Hosted deployments need HTTPS. The server mediates provider setup and delegates compute to the selected Dot's conversation.
+The included speech adapter uses the Realtime API at `api.openai.com`. Set `VOICE_API_KEY` to a key with access to that API and `VOICE_MODEL` to a supported Realtime model (the local UI test used `gpt-realtime-2.1`); `VOICE_NAME` selects the voice. The Intelligence base URL changes the text model endpoint only, not speech. Calls use browser microphone access and WebRTC. Hosted deployments need HTTPS. The server mediates provider setup and delegates compute to the selected Dot's conversation.
 
 A configured key is not evidence of a successful call. Verify microphone access, audio playback, compute delegation, interruption, hangup, and the saved receipt with your deployment before relying on voice workflows.
 
@@ -152,51 +120,6 @@ docker compose down
 
 For remote hosting, configure an HTTPS reverse proxy and the matching `APP_ORIGIN`. See [Security](../SECURITY.md) for the template's deployment boundary.
 
-## Automatic Learning
-
-OpenDots connects [CopilotKit Automatic Learning](https://docs.copilotkit.ai/learning)
-to individual Dots. It uses the existing server-side `INTELLIGENCE_API_KEY` and
-optional `INTELLIGENCE_API_URL`; no additional model key or frontend key is needed.
-
-1. Open **Learning** in the same Intelligence project and create a container for
-   one focused workflow, such as `research-workflow`. IDs use 1–64 lowercase
-   letters, numbers, and single hyphens.
-2. In OpenDots, edit the Dot and enter that ID under **Automatic Learning**.
-   Saving the ID configures routing; it does not create or verify the remote container.
-3. Start new conversations and complete related workflows. Each conversation keeps
-   the container assigned when it was created. Existing conversations, including
-   ones created before this integration, are not enrolled retroactively. Changing
-   or clearing the Dot's ID affects only new conversations. This applies to page
-   chat, scheduled and voice compute in those conversations, and new Slack threads.
-4. In Intelligence, inspect the evidence, run Learning manually or use its schedule,
-   and review and publish proposed skills. The default automatic threshold is 15
-   eligible threads; use the readiness count shown in your deployment.
-5. Enable **Skill delivery** on the Intelligence container, then enable **Use
-   published skills** in the Dot's settings. Start a new turn in an enrolled
-   conversation. BuiltInAgent loads the latest verified published catalog; its
-   TanStack AI factory runs the model and exposes `copilotkit_load_skill` and `copilotkit_read_skill_file`.
-   The model decides which relevant skills to load. Check the run's tool calls to
-   verify actual use; saving settings alone does not establish connectivity.
-
-Skill delivery always uses the conversation's original container, even after the
-Dot is pointed at another container. The Dot's delivery checkbox applies to all its
-conversations. Unchecking it stops delivery on subsequent turns; changing Learning
-settings also stops active work. Conversations without a container do not request
-skills. Existing research, memory, page, and computer permissions still apply.
-
-Ingestion and delivery are separate. Clearing the container does not unenroll older
-conversations; pause Learning in Intelligence to stop its analysis. Turning off
-delivery does not stop evidence collection. A delivery denial or an unavailable
-initial skill snapshot fails the turn rather than silently continuing without the
-configured skills. Restore delivery or uncheck **Use published skills** to continue
-without them. Skills require review and publication in Intelligence; OpenDots does
-not automatically approve them.
-
-The integration uses an explicit container list, so ambient
-`CPK_INTELLIGENCE_LEARNING_CONTAINER_ID` and `CPK_INTELLIGENCE_SKILLS_REVISION`
-variables do not override a conversation's configuration. Self-hosted Intelligence
-must support the [skill delivery endpoints](https://docs.copilotkit.ai/intelligence/learned-skills).
-
 ## Development checks
 
 ```sh
@@ -207,4 +130,4 @@ npm test
 npm run build
 ```
 
-Automated tests use service fixtures. Live model, Intelligence, Slack, and voice verification requires your own configured services.
+Automated tests use service fixtures. Live model and voice verification requires your own configured provider keys.

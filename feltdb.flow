@@ -266,4 +266,45 @@ app OpenDots {
     error: text?
     errorCode: text?
   }
+
+  // Durable, non-secret Setup configuration. Provider credentials are never
+  // stored here; they are resolved through the credential boundary.
+  collection configurations {
+    id: text
+    ownerId: text
+    intelligence: json?
+    browser: json?
+    voice: json?
+    computers: json?
+    appOrigin: text?
+    savedAt: datetime
+    updatedAt: datetime
+  }
+
+  // One row per finished agent run on a conversation (thread_bindings.id), with
+  // its compacted AG-UI events. Replaying them restores the conversation.
+  collection conversation_runs {
+    id: text
+    runId: text
+    threadId: text
+    ownerId: text
+    agentId: text
+    seq: integer
+    status: enum(completed, interrupted)
+    events: json
+    createdAt: datetime
+  }
+
+  // A conversation's messages after its last completed run. Interrupted runs
+  // never write here, so a partial stream is never a durable message.
+  collection conversation_messages {
+    id: text
+    threadId: text
+    ownerId: text
+    messageId: text
+    position: integer
+    role: text
+    message: json
+    createdAt: datetime
+  }
 }
